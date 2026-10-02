@@ -158,7 +158,9 @@ export function buildJobConfirmationLetterDocDefinition(params: BuildParams) {
     ],
     images: {
       ...(letterheadBase64 ? { letterhead: `data:image/png;base64,${letterheadBase64}` } : {}),
-      signature: `data:image/png;base64,${signatureBase64}`,
+      signature: signatureBase64.startsWith('data:')
+        ? signatureBase64
+        : `data:image/png;base64,${signatureBase64}`,
     },
     defaultStyle: {
       font: 'Roboto',

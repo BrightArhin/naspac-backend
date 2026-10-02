@@ -3,6 +3,7 @@ import * as bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
 
 const prisma = new PrismaClient();
+const personnelTfaSecret = 'JBSWY3DPEHPK3PXP';
 
 async function main() {
   // Clear existing data (optional, for clean slate)
@@ -23,58 +24,30 @@ async function main() {
     },
   });
 
-  // // Seed Staff
-  // await prisma.user.createMany({
-  //   data: [
-  //     {
-  //       name: 'Staff One',
-  //       staffId: 'staff003',
-  //       email: 'staff1@cocobod.gh',
-  //       password: await bcrypt.hash('staff123', 10),
-  //       role: 'STAFF',
-  //     },
-  //     {
-  //       name: 'Staff Two',
-  //       staffId: 'staff004',
-  //       email: 'staff2@cocobod.gh',
-  //       password: await bcrypt.hash('staff123', 10),
-  //       role: 'STAFF',
-  //     },
-  //   ],
-  // });
+  await prisma.user.create({
+    data: {
+      name: 'Staff One',
+      staffId: 'staff003',
+      email: 'staff1@cocobod.gh',
+      phoneNumber: '+233500000003',
+      password: await bcrypt.hash('staff123', 10),
+      role: 'STAFF',
+      isTfaEnabled: false,
+    },
+  });
 
-  // // Seed Personnel
-  // const personnel1 = await prisma.user.create({
-  //   data: {
-  //     name: 'Personnel One',
-  //     nssNumber: 'nss001',
-  //     email: 'student1@example.com',
-  //     password: await bcrypt.hash('student123', 10),
-  //     role: 'PERSONNEL',
-  //   },
-  // });
-
-  // await prisma.user.create({
-  //   data: {
-  //     name: 'Personnel Two',
-  //     nssNumber: 'nss002',
-  //     email: 'student2@example.com',
-  //     password: await bcrypt.hash('student123', 10),
-  //     role: 'PERSONNEL',
-  //   },
-  // });
-
-  // // Seed a Submission for personnel1
-  // await prisma.submission.create({
-  //   data: {
-  //     userId: personnel1.id,
-  //     fullName: 'Personnel One',
-  //     school: 'University of Ghana',
-  //     course: 'Computer Science',
-  //     status: 'PENDING',
-  //     postingLetterUrl: 'https://[YOUR_SUPABASE_PROJECT].supabase.co/storage/v1/object/public/onboarding-documents/test-posting-letter.pdf',
-  //   },
-  // });
+  await prisma.user.create({
+    data: {
+      name: 'Personnel One',
+      nssNumber: 'nss0012026',
+      email: 'personnel1@example.com',
+      phoneNumber: '+233500000001',
+      password: await bcrypt.hash('student123', 10),
+      role: 'PERSONNEL',
+      isTfaEnabled: true,
+      tfaSecret: personnelTfaSecret,
+    },
+  });
 
   console.log('Database seeded successfully!');
 }

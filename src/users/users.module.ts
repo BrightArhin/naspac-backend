@@ -13,8 +13,8 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
     NotificationsModule,
     MulterModule.register({
       limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB limit
-        files: 2, // Max 2 files (postingLetter, appointmentLetter)
+        fileSize: 10 * 1024 * 1024, // 10MB limit
+        files: 2, // Signature upload sends two images; letter upload sends one PDF
       },
       fileFilter: (req, file, cb) => {
         if (file.mimetype === 'application/pdf') {

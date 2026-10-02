@@ -1,5 +1,5 @@
 import { SubmissionStatus } from '@prisma/client';
-import { IsString, IsEnum, IsEmail, IsInt, MinLength, IsOptional, Matches, IsArray, IsNotEmpty } from 'class-validator';
+import { IsString, IsEnum, IsEmail, IsInt, MinLength, IsOptional, Matches, IsArray, IsNotEmpty, IsIn } from 'class-validator';
 
 enum Gender {
   MALE = 'MALE',
@@ -45,13 +45,20 @@ export class SubmitOnboardingDto {
   divisionPostedTo: string;
 
   @IsOptional()
-  postingLetter: any;
-
-  @IsOptional()
-  appointmentLetter: any;
+  postingAppointmentLetter: any;
 
   @IsOptional()
   verificationForm: any;
+}
+
+export class RejectUploadDto {
+  @IsIn(['letter', 'verification'])
+  target: 'letter' | 'verification';
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(5)
+  reason: string;
 }
 
 export class UpdateSubmissionStatusDto {

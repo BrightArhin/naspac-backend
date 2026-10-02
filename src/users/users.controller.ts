@@ -5,7 +5,7 @@ import { Roles } from 'src/common/decorators/roles.decorator';
 import { JwtAuthGuard } from 'src/common/guards/auth-guard';
 import { RolesGuard } from 'src/common/guards/roles-guard';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
-import { GetSubmissionStatusCountsDto, SubmitOnboardingDto, UpdateSubmissionStatusDto } from './dto/submit-onboarding.dto';
+import { GetSubmissionStatusCountsDto, RejectUploadDto, SubmitOnboardingDto, UpdateSubmissionStatusDto } from './dto/submit-onboarding.dto';
 import { LocalStorageService } from 'src/documents/local-storage.service';
 import { PrismaService } from 'prisma/prisma.service';
 import { UpdateStaffDto } from './dto/update-user.dto';
@@ -60,14 +60,17 @@ async getUserProfile(@Request() req) {
       );
     }
 
-    const signatureFileName = `signatures/admin-${adminId}-signature-${Date.now()}.png`;
+    const imageExtension = (file: Express.Multer.File) =>
+      file.mimetype === 'image/jpeg' ? 'jpg' : 'png';
+
+    const signatureFileName = `signatures/admin-${adminId}-signature-${Date.now()}.${imageExtension(signatureFile)}`;
     const signatureUrl = await this.localStorageService.uploadFile(
       signatureFile.buffer,
       signatureFileName,
       'local',
     );
 
-    const stampFileName = `stamps/admin-${adminId}-stamp-${Date.now()}.png`;
+    const stampFileName = `stamps/admin-${adminId}-stamp-${Date.now()}.${imageExtension(stampFile)}`;
     const stampUrl = await this.localStorageService.uploadFile(
       stampFile.buffer,
       stampFileName,
@@ -78,6 +81,7 @@ async getUserProfile(@Request() req) {
       where: { id: adminId },
       data: {
         signage: signatureFileName,
+        signaturePath: signatureFileName,
         stamp: stampFileName,
         sigWidth: 100,
         sigHeight: 50,
@@ -96,25 +100,54 @@ async getUserProfile(@Request() req) {
  @Post('submit-onboarding')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('PERSONNEL')
-  @UseInterceptors(FilesInterceptor('files', 2, {
+  @UseInterceptors(FilesInterceptor('files', 1, {
     fileFilter: (req, file, cb) => {
       if (file.mimetype !== 'application/pdf') {
         return cb(new Error('Only PDF files are allowed'), false);
       }
       cb(null, true);
     },
-    limits: { fileSize: 5 * 1024 * 1024 },
+    limits: { fileSize: 10 * 1024 * 1024 },
   }))
   async submitOnboarding(
     @Request() req,
     @Body() dto: SubmitOnboardingDto,
     @UploadedFiles() files: Express.Multer.File[],
   ) {
-    const fileMap = {
-      postingLetter: files.find((f) => f.originalname.includes('postingLetter')),
-      appointmentLetter: files.find((f) => f.originalname.includes('appointmentLetter')),
-    };
-    return this.usersService.submitOnboarding(req.user.id, dto, fileMap);
+    const letter = files?.find((f) => f.originalname === 'postingAppointmentLetter.pdf') || files?.[0];
+    return this.usersService.submitOnboarding(req.user.id, dto, {
+      postingAppointmentLetter: letter,
+    });
+  }
+
+  @Post('replace-posting-appointment-letter')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('PERSONNEL')
+  @UseInterceptors(FileInterceptor('postingAppointmentLetter', {
+    fileFilter: (req, file, cb) => {
+      if (file.mimetype !== 'application/pdf') {
+        return cb(new Error('Only PDF files are allowed'), false);
+      }
+      cb(null, true);
+    },
+    limits: { fileSize: 10 * 1024 * 1024 },
+  }))
+  async replacePostingAppointmentLetter(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.usersService.replacePostingAppointmentLetter(req.user.id, file);
+  }
+
+  @Post('reject-upload/:submissionId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'STAFF')
+  async rejectUpload(
+    @Request() req,
+    @Param('submissionId', ParseIntPipe) submissionId: number,
+    @Body() dto: RejectUploadDto,
+  ) {
+    return this.usersService.rejectUpload(req.user.id, submissionId, dto.target, dto.reason);
   }
 
   //Get unversities
@@ -235,7 +268,7 @@ async getPersonnelStatus(@Request() req, @Query('year') year?: string) {
     }
     cb(null, true);
   },
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 },
 }))
 async submitVerificationForm(
   @Request() req,
@@ -291,8 +324,17 @@ async updateDepartment(
   }
 
     @Post('upload-appointment-signature')
-  @UseGuards(JwtAuthGuard)
-  @UseInterceptors(FileInterceptor('signature'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'STAFF')
+  @UseInterceptors(FileInterceptor('signature', {
+    fileFilter: (req, file, cb) => {
+      if (!['image/png', 'image/jpeg'].includes(file.mimetype)) {
+        return cb(new Error('Only PNG or JPEG files are allowed'), false);
+      }
+      cb(null, true);
+    },
+    limits: { fileSize: 2 * 1024 * 1024 },
+  }))
   async uploadAppointmentSignature(
     @Req() request: any,
     @UploadedFile() file: Express.Multer.File,

@@ -16,12 +16,17 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;
   const nodeEnv = configService.get<string>('NODE_ENV') || 'development';
+  const frontendUrl = configService.get<string>('FRONTEND_URL');
+  const allowedOrigins = ['https://nss.cocobod.net', frontendUrl].filter(
+    (origin, index, origins): origin is string =>
+      Boolean(origin) && origins.indexOf(origin) === index,
+  );
 
- app.enableCors({
-  origin: ['https://nss.cocobod.net', 'http://localhost:5173', 'http://192.168.2.72:5173'],
-   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-   allowedHeaders: 'Content-Type, Authorization',
-   credentials: true,
+  app.enableCors({
+    origin: allowedOrigins,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: 'Content-Type, Authorization',
+    credentials: true,
   });
 
   app.use(compression());
@@ -39,7 +44,10 @@ async function bootstrap() {
   const expressApp = app.getHttpAdapter().getInstance();
 
   if (nodeEnv === 'production') {
-    const storagePath = join(process.env.SERVER_ABSOLUTE_PATH || process.cwd(), 'files');
+    const storagePath = join(
+      process.env.SERVER_ABSOLUTE_PATH || process.cwd(),
+      'files',
+    );
     console.log(`(PROD) Serving static files from: ${storagePath}`);
     expressApp.use('/files', express.static(storagePath));
   } else {
@@ -53,6 +61,8 @@ async function bootstrap() {
 
   await app.listen(port);
   console.log(`Application is running on port ${port}`);
-  console.log(`Bull Dashboard available at http://localhost:${port}/admin/queues`);
+  console.log(
+    `Bull Dashboard available at http://localhost:${port}/admin/queues`,
+  );
 }
 bootstrap();

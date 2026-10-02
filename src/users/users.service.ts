@@ -25,12 +25,18 @@ import { buildJobConfirmationLetterDocDefinition } from 'src/templates/jobConfir
 // }
 // const pdfParse = require('pdf-parse'); 
 
-function getBase64Image(filePath: string): string {
+function readStoredFile(filePath: string): Buffer {
   const baseStoragePath = process.env.SERVER_ABSOLUTE_PATH || process.cwd();
 
-  const normalizedPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
+  let normalizedPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
+  if (normalizedPath.startsWith("files/")) {
+    normalizedPath = normalizedPath.slice("files/".length);
+  }
 
+  const cwd = process.cwd();
   const possiblePaths = [
+    path.resolve(cwd, "storage", normalizedPath),
+    path.resolve(cwd, "files", normalizedPath),
     path.resolve(normalizedPath),
     path.resolve("src", normalizedPath),
     path.resolve("dist/src", normalizedPath),
@@ -46,14 +52,25 @@ function getBase64Image(filePath: string): string {
       if (fs.existsSync(absPath)) {
         const file = fs.readFileSync(absPath);
         console.log(`Found file at: ${absPath}`);
-        return file.toString('base64');
+        return file;
       }
     } catch (error) {
       console.error(`Error accessing ${absPath}:`, error);
     }
   }
-  
+
   throw new Error(`Could not find file: ${filePath}. Tried paths: ${possiblePaths.join(', ')}`);
+}
+
+function getBase64Image(filePath: string): string {
+  return readStoredFile(filePath).toString('base64');
+}
+
+function imageToDataUrl(filePath: string): string {
+  const file = readStoredFile(filePath);
+  const header = file.subarray(0, 3).toString('hex');
+  const mime = header.startsWith('ffd8ff') ? 'image/jpeg' : 'image/png';
+  return `data:${mime};base64,${file.toString('base64')}`;
 }
 
 (pdfMake as any).vfs = pdfFonts.vfs;
@@ -75,6 +92,22 @@ const fonts = {
     bolditalics: 'Roboto-MediumItalic.ttf',
   },
 };
+
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+
+function assertPdfUpload(file: Express.Multer.File | undefined, label: string) {
+  if (!file) {
+    throw new HttpException(`${label} is required`, HttpStatus.BAD_REQUEST);
+  }
+  const name = file.originalname?.toLowerCase() || '';
+  const header = file.buffer?.subarray(0, 5).toString('utf8');
+  if (file.mimetype !== 'application/pdf' || !name.endsWith('.pdf') || header !== '%PDF-') {
+    throw new HttpException(`${label} must be a PDF`, HttpStatus.BAD_REQUEST);
+  }
+  if (file.size > MAX_PDF_BYTES) {
+    throw new HttpException(`${label} must be 10MB or smaller`, HttpStatus.BAD_REQUEST);
+  }
+}
 
 @Injectable()
 export class UsersService {
@@ -104,6 +137,8 @@ export class UsersService {
       staffId: true,
       email: true,
       role: true,
+      signage: true,
+      stamp: true,
       deletedAt: true,
     },
   });
@@ -118,6 +153,8 @@ export class UsersService {
     staffId: user.staffId || null,
     email: user.email || null,
     role: user.role,
+    signatureUrl: user.signage ? `/files/${user.signage}` : null,
+    stampUrl: user.stamp ? `/files/${user.stamp}` : null,
   };
 }
 
@@ -202,7 +239,7 @@ async createUser(dto: CreateUserDto) {
   return this.prisma.user.findUnique({ where: { email, deletedAt: null } });
   }
 
- async submitOnboarding(userId: number, dto: SubmitOnboardingDto, files: { postingLetter?: Express.Multer.File; appointmentLetter?: Express.Multer.File }) {
+ async submitOnboarding(userId: number, dto: SubmitOnboardingDto, files: { postingAppointmentLetter?: Express.Multer.File }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId, deletedAt: null } });
     if (!user || user.role !== 'PERSONNEL' || user.nssNumber !== dto.nssNumber) {
       throw new HttpException('Unauthorized or invalid NSS number', HttpStatus.FORBIDDEN);
@@ -215,48 +252,21 @@ async createUser(dto: CreateUserDto) {
       throw new HttpException('Submission already exists for this user', HttpStatus.BAD_REQUEST);
     }
 
-    if (files.postingLetter && files.postingLetter.mimetype !== 'application/pdf') {
-      throw new HttpException('Posting letter must be a PDF', HttpStatus.BAD_REQUEST);
-    }
-    if (files.appointmentLetter && files.appointmentLetter.mimetype !== 'application/pdf') {
-      throw new HttpException('Appointment letter must be a PDF', HttpStatus.BAD_REQUEST);
-    }
-  //    if (!dto.phoneNumber || !/^\+\d{10,15}$/.test(dto.phoneNumber)) {
-  //   throw new HttpException('Valid phone number with country code required (e.g., +233557484584)', HttpStatus.BAD_REQUEST);
-  // }
-
-   const MAX_SIZE = 10 * 1024 * 1024;
-  if (files.postingLetter && files.postingLetter.size > MAX_SIZE) {
-    throw new HttpException('Posting letter too large (max 10MB)', HttpStatus.BAD_REQUEST);
-  }
-  if (files.appointmentLetter && files.appointmentLetter.size > MAX_SIZE) {
-    throw new HttpException('Appointment letter too large (max 10MB)', HttpStatus.BAD_REQUEST);
-  }  
-
-    let postingLetterUrl = '';
-    let appointmentLetterUrl = '';
-
- if (files.postingLetter) {
-  const fileName = `posting-letters/${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`;
-  postingLetterUrl = await this.localStorageService.uploadFile(
-    files.postingLetter.buffer,
-    fileName,
-  );
-}
-
-if (files.appointmentLetter) {
-  const fileName = `appointment-letters/${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`;
-  appointmentLetterUrl = await this.localStorageService.uploadFile(
-    files.appointmentLetter.buffer,
-    fileName,
-  );
-}
-
-
     const yearOfNss = parseInt(dto.yearOfNss, 10);
     if (isNaN(yearOfNss) || yearOfNss < 1900 || yearOfNss > new Date().getFullYear()) {
       throw new HttpException('Invalid NSS year', HttpStatus.BAD_REQUEST);
     }
+
+    assertPdfUpload(files.postingAppointmentLetter, 'Posting and appointment letter');
+
+    const letterFile = files.postingAppointmentLetter!;
+    const fileName = `posting-appointment-letters/${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`;
+    const letterUrl = await this.localStorageService.uploadFile(
+      letterFile.buffer,
+      fileName,
+    );
+    const postingLetterUrl = letterUrl;
+    const appointmentLetterUrl = letterUrl;
 
   return this.prisma.$transaction(async (prisma) => {
     await prisma.user.update({
@@ -356,9 +366,9 @@ if (files.appointmentLetter) {
     throw new HttpException('Submission not found or deleted', HttpStatus.NOT_FOUND);
   }
 
-  // Validate file
-  if (!verificationForm || verificationForm.mimetype !== 'application/pdf') {
-    throw new HttpException('Validated Letter must be a PDF', HttpStatus.BAD_REQUEST);
+  assertPdfUpload(verificationForm, 'Verification form');
+  if (submission.status !== 'ENDORSED') {
+    throw new HttpException('Verification form can be uploaded after the letter is endorsed', HttpStatus.BAD_REQUEST);
   }
 
   // Upload file to local storage
@@ -373,6 +383,8 @@ if (files.appointmentLetter) {
       where: { id: submission.id },
       data: {
         verificationFormUrl,
+        verificationRejected: false,
+        verificationRejectionReason: null,
         updatedAt: new Date(),
       },
       select: {
@@ -585,6 +597,10 @@ async getGhanaUniversities() {
         appointmentLetterUrl: true,
         verificationFormUrl: true,
         jobConfirmationLetterUrl: true,
+        uploadRejected: true,
+        uploadRejectionReason: true,
+        verificationRejected: true,
+        verificationRejectionReason: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -630,6 +646,10 @@ async getGhanaUniversities() {
         appointmentLetterUrl: true,
         verificationFormUrl: true,
         jobConfirmationLetterUrl: true,
+        uploadRejected: true,
+        uploadRejectionReason: true,
+        verificationRejected: true,
+        verificationRejectionReason: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -704,6 +724,23 @@ async updateSubmissionStatus(
  );
  }
 
+ const submissionFlags = await this.prisma.submission.findUnique({
+  where: { id: submissionId },
+  select: { uploadRejected: true, verificationRejected: true, verificationFormUrl: true },
+ });
+ if (dto.status === 'PENDING_ENDORSEMENT' && submissionFlags?.uploadRejected) {
+  throw new HttpException(
+    'This posting and appointment letter was rejected. Wait for the personnel to upload a new PDF.',
+    HttpStatus.BAD_REQUEST,
+  );
+ }
+ if (dto.status === 'VALIDATED' && submissionFlags?.verificationRejected && !submissionFlags.verificationFormUrl) {
+  throw new HttpException(
+    'The verification form was rejected. Wait for the personnel to upload a new PDF.',
+    HttpStatus.BAD_REQUEST,
+  );
+ }
+
  return this.prisma.$transaction(async (prisma) => {
  let jobConfirmationLetterUrl = submission.jobConfirmationLetterUrl;
 
@@ -716,42 +753,48 @@ async updateSubmissionStatus(
 
   const currentUser = await prisma.user.findUnique({
     where: { id: userId, deletedAt: null },
-    select: { role: true, signaturePath: true },
+    select: { role: true, signaturePath: true, signage: true },
   });
 
   if (!currentUser) {
     throw new HttpException(`User ${userId} not found`, HttpStatus.NOT_FOUND);
   }
 
-    let signaturePath: string | null = null;
+  if (!['ADMIN', 'STAFF'].includes(currentUser.role)) {
+    throw new HttpException(
+      `User ${userId} is not authorized to validate submissions`,
+      HttpStatus.FORBIDDEN,
+    );
+  }
 
-    if (currentUser.role === 'ADMIN' && currentUser.signaturePath) {
-      signaturePath = currentUser.signaturePath;
-    } else if (currentUser.role === 'STAFF') {
-      const adminUser = await prisma.user.findFirst({
-        where: { role: 'ADMIN', deletedAt: null, signaturePath: { not: null } },
-        select: { signaturePath: true },
+  let signaturePath: string | null = currentUser.signaturePath || currentUser.signage;
+
+  if (!signaturePath) {
+    const adminUser = await prisma.user.findFirst({
+      where: {
+        role: 'ADMIN',
+        deletedAt: null,
+        OR: [{ signaturePath: { not: null } }, { signage: { not: null } }],
+      },
+      select: { signaturePath: true, signage: true },
     });
+    signaturePath = adminUser?.signaturePath || adminUser?.signage || null;
+  }
 
-    if (!adminUser || !adminUser.signaturePath) {
-      throw new HttpException(
-        'No ADMIN signature available for validation',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-      signaturePath = adminUser.signaturePath;
-    } else {
-      throw new HttpException(
-        `User ${userId} is not authorized to validate submissions`,
-        HttpStatus.FORBIDDEN,
-      );
-    }
+  if (!signaturePath) {
+    throw new HttpException(
+      currentUser.role === 'ADMIN'
+        ? 'Upload a signature on your profile before you validate.'
+        : 'No signature is available. Upload one on your profile, or ask an admin to upload a signature on theirs.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
 
   console.log('Signature path to use:', signaturePath);
 
  let signatureBase64;
  try {
- signatureBase64 = getBase64Image(signaturePath);
+ signatureBase64 = imageToDataUrl(signaturePath);
  } catch (error) {
  throw new HttpException(
  `Failed to load signature for user: ${error.message}`,
@@ -909,11 +952,13 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
   }
 
   // Save signature to local storage
- const fileName = `signatures/user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.${file.mimetype.split('/')[1]}`;
-  const signaturePath = await this.localStorageService.uploadFile(
+  const extension = file.mimetype === 'image/jpeg' ? 'jpg' : 'png';
+  const fileName = `signatures/user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+  await this.localStorageService.uploadFile(
     file.buffer,
     fileName,
   );
+  const signaturePath = fileName;
 
   return this.prisma.$transaction(async (prisma) => {
     // Update user with signature path
@@ -1479,7 +1524,15 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
 
   const submission = await this.prisma.submission.findFirst({
     where: { userId, yearOfNss: currentYear, deletedAt: null },
-    select: { id: true, status: true, deletedAt: true },
+    select: {
+      id: true,
+      status: true,
+      deletedAt: true,
+      uploadRejected: true,
+      uploadRejectionReason: true,
+      verificationRejected: true,
+      verificationRejectionReason: true,
+    },
   });
 
   const statusCompletionMap: Record<string, number> = {
@@ -1513,7 +1566,186 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     submissionStatus: submission && !submission.deletedAt ? submission.status : null,
     completionPercentage,
     serviceDays,
+    uploadRejected: submission && !submission.deletedAt ? submission.uploadRejected : false,
+    uploadRejectionReason: submission && !submission.deletedAt ? submission.uploadRejectionReason : null,
+    verificationRejected: submission && !submission.deletedAt ? submission.verificationRejected : false,
+    verificationRejectionReason: submission && !submission.deletedAt ? submission.verificationRejectionReason : null,
    };
+  }
+
+  async rejectUpload(requesterId: number, submissionId: number, target: 'letter' | 'verification', reason: string) {
+    const requester = await this.prisma.user.findUnique({
+      where: { id: requesterId, deletedAt: null },
+      select: { id: true, role: true, name: true },
+    });
+    if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+      throw new HttpException('Only staff or admins can reject an upload', HttpStatus.FORBIDDEN);
+    }
+    if (target === 'letter' && requester.role !== 'ADMIN' && requester.role !== 'STAFF') {
+      throw new HttpException('Unauthorized', HttpStatus.FORBIDDEN);
+    }
+
+    const trimmedReason = reason?.trim();
+    if (!trimmedReason || trimmedReason.length < 5) {
+      throw new HttpException('A reason of at least 5 characters is required', HttpStatus.BAD_REQUEST);
+    }
+
+    const submission = await this.prisma.submission.findUnique({
+      where: { id: submissionId },
+      select: {
+        id: true,
+        userId: true,
+        fullName: true,
+        nssNumber: true,
+        email: true,
+        status: true,
+        deletedAt: true,
+        verificationFormUrl: true,
+      },
+    });
+    if (!submission || submission.deletedAt) {
+      throw new HttpException('Submission not found', HttpStatus.NOT_FOUND);
+    }
+
+    if (target === 'letter') {
+      if (!['PENDING', 'PENDING_ENDORSEMENT'].includes(submission.status)) {
+        throw new HttpException('The posting and appointment letter can only be rejected before it is endorsed', HttpStatus.BAD_REQUEST);
+      }
+    } else if (submission.status !== 'ENDORSED' || !submission.verificationFormUrl) {
+      throw new HttpException('There is no verification form to reject', HttpStatus.BAD_REQUEST);
+    }
+
+    const documentName = target === 'letter' ? 'Posting and Appointment Letter' : 'Verification form';
+
+    return this.prisma.$transaction(async (prisma) => {
+      const updated = await prisma.submission.update({
+        where: { id: submissionId },
+        data: target === 'letter'
+          ? {
+              status: 'PENDING',
+              uploadRejected: true,
+              uploadRejectionReason: trimmedReason,
+              updatedAt: new Date(),
+            }
+          : {
+              verificationFormUrl: null,
+              verificationRejected: true,
+              verificationRejectionReason: trimmedReason,
+              updatedAt: new Date(),
+            },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          submissionId,
+          action: target === 'letter' ? 'LETTER_UPLOAD_REJECTED' : 'VERIFICATION_UPLOAD_REJECTED',
+          userId: requesterId,
+          details: `${documentName} rejected by ${requester.name}: ${trimmedReason}`,
+          createdAt: new Date(),
+        },
+      });
+
+      await prisma.notification.create({
+        data: {
+          title: `${documentName} rejected`,
+          description: `Your ${documentName} was not accepted. ${trimmedReason}`,
+          timestamp: new Date(),
+          iconType: 'USER',
+          role: 'PERSONNEL',
+          userId: submission.userId,
+        },
+      });
+
+      await this.notificationsService.sendUploadRejectedEmail(
+        submission.email,
+        submission.fullName,
+        documentName,
+        trimmedReason,
+      );
+
+      return {
+        message: `${documentName} rejected and the personnel has been emailed`,
+        submission: updated,
+      };
+    });
+  }
+
+  async replacePostingAppointmentLetter(userId: number, file: Express.Multer.File) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, role: true, nssNumber: true },
+    });
+    if (!user || user.role !== 'PERSONNEL') {
+      throw new HttpException('Only personnel can replace this letter', HttpStatus.FORBIDDEN);
+    }
+
+    const submission = await this.prisma.submission.findFirst({
+      where: { userId, deletedAt: null },
+      select: { id: true, status: true, uploadRejected: true, email: true, fullName: true, nssNumber: true },
+    });
+    if (!submission) {
+      throw new HttpException('Submission not found', HttpStatus.NOT_FOUND);
+    }
+    if (!submission.uploadRejected || submission.status !== 'PENDING') {
+      throw new HttpException('This letter can only be replaced after it is rejected', HttpStatus.BAD_REQUEST);
+    }
+
+    assertPdfUpload(file, 'Posting and appointment letter');
+    const fileName = `posting-appointment-letters/${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`;
+    const letterUrl = await this.localStorageService.uploadFile(file.buffer, fileName);
+
+    return this.prisma.$transaction(async (prisma) => {
+      const updated = await prisma.submission.update({
+        where: { id: submission.id },
+        data: {
+          postingLetterUrl: letterUrl,
+          appointmentLetterUrl: letterUrl,
+          uploadRejected: false,
+          uploadRejectionReason: null,
+          status: 'PENDING',
+          updatedAt: new Date(),
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          submissionId: submission.id,
+          action: 'LETTER_UPLOAD_REPLACED',
+          userId,
+          details: `Personnel (NSS: ${user.nssNumber || submission.nssNumber}) uploaded a replacement posting and appointment letter`,
+          createdAt: new Date(),
+        },
+      });
+
+      await prisma.notification.createMany({
+        data: [
+          {
+            title: 'Letter replaced',
+            description: 'Your posting and appointment letter has been submitted again and is pending review.',
+            timestamp: new Date(),
+            iconType: 'USER',
+            role: 'PERSONNEL',
+            userId,
+          },
+          {
+            title: 'Replacement letter uploaded',
+            description: `${submission.fullName} (NSS: ${submission.nssNumber}) uploaded a new posting and appointment letter.`,
+            timestamp: new Date(),
+            iconType: 'BELL',
+            role: 'STAFF',
+          },
+          {
+            title: 'Replacement letter uploaded',
+            description: `${submission.fullName} (NSS: ${submission.nssNumber}) uploaded a new posting and appointment letter.`,
+            timestamp: new Date(),
+            iconType: 'BELL',
+            role: 'ADMIN',
+          },
+        ],
+      });
+
+      return updated;
+    });
   }
 
   async updateStaff(staffId: number, dto: UpdateStaffDto, requesterId: number) {

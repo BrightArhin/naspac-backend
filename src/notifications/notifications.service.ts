@@ -9,7 +9,7 @@ export class NotificationsService {
   constructor(@InjectQueue('email') private emailQueue: Queue) {}
 
   async sendOnboardingEmail(to: string, nssNumber: string, token: string) {
-    await this.emailQueue.add(
+    const enqueue = this.emailQueue.add(
       'send-email',
       {
         to,
@@ -25,6 +25,10 @@ export class NotificationsService {
         backoff: 5000,
       },
     );
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Email queue is not reachable')), 8000),
+    );
+    await Promise.race([enqueue, timeout]);
   }
 
   async sendForgotPasswordEmail(to: string, token: string) {
@@ -153,6 +157,38 @@ export class NotificationsService {
           <p>Dear ${personnelName},</p>
           <p>Your appointment letter has been successfully endorsed.</p>
           <p>Please check your dashboard for further details or contact the administration at hr.training@cocobod.gh or call 030 266 1877, should you have any questions.</p>
+          <p>Best regards,<br>HR Team</p>
+        `,
+      },
+      {
+        attempts: 3,
+        backoff: 5000,
+      },
+    );
+  }
+
+  async sendUploadRejectedEmail(
+    to: string,
+    fullName: string,
+    documentName: string,
+    reason: string,
+  ) {
+    const safeReason = reason
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    await this.emailQueue.add(
+      'send-email',
+      {
+        to,
+        subject: `Action required: ${documentName} was not accepted`,
+        content: `
+          <h1>Please upload the correct document</h1>
+          <p>Dear ${fullName},</p>
+          <p>Your <strong>${documentName}</strong> was not accepted because:</p>
+          <p>${safeReason}</p>
+          <p>Log in to your dashboard and upload the correct PDF. The file must be a PDF no larger than 10MB.</p>
+          <p>If you have any questions, contact hr.training@cocobod.gh or call 030 266 1877.</p>
           <p>Best regards,<br>HR Team</p>
         `,
       },

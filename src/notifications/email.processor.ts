@@ -4,10 +4,11 @@ import * as nodemailer from 'nodemailer';
 
 @Processor('email')
 export class EmailProcessor {
+  private readonly port = Number(process.env.MAILER_PORT) || 587;
   private transporter = nodemailer.createTransport({
     host: process.env.MAILER_HOST,
-    port: Number(process.env.MAILER_PORT),
-    secure: false, // Use TLS
+    port: this.port,
+    secure: this.port === 465,
     auth: {
       user: process.env.MAILER_USER,
       pass: process.env.MAILER_PASSWORD,

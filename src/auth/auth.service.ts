@@ -110,7 +110,7 @@ async loginStaffAdmin(staffId: string, password: string) {
     if (!user.tfaSecret || (!user.phoneNumber && !user.email)) {
       throw new HttpException('2FA is enabled but no phone number or email is set', HttpStatus.BAD_REQUEST);
     }
-    // await this.smsService.sendOtp(user.id);
+    await this.smsService.sendOtp(user.id);
     const tempPayload = {
       sub: user.id,
       identifier: user.staffId,
@@ -165,7 +165,7 @@ async loginStaffAdmin(staffId: string, password: string) {
     //   throw new HttpException('Phone number not set. Please complete onboarding.', HttpStatus.BAD_REQUEST);
     // }
     // Personnel always require 2FA
-    // await this.smsService.sendOtp(user.id);
+    await this.smsService.sendOtp(user.id);
     const tempPayload = { sub: user.id, userId: user.id, identifier: user.nssNumber, role: user.role, name: user.name, email: user.email || '', phoneNumber: user.phoneNumber, isTfaRequired: true, isTfaEnabled: user.isTfaEnabled };
     return {
       tempAccessToken: this.jwtService.sign(tempPayload, { expiresIn: '5m' }),
@@ -216,22 +216,58 @@ async loginStaffAdmin(staffId: string, password: string) {
      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new HttpException('Invalid email address', HttpStatus.BAD_REQUEST);
   }
-    const existingUser = await this.usersService.findByNssNumberOrStaffId(nssNumber);
-    if (existingUser) {
-      throw new HttpException('NSS number already registered', HttpStatus.BAD_REQUEST);
-    }
-    if (existingUser?.deletedAt) {
-  throw new HttpException(
-    'Account is disabled. Please contact support.',
-    HttpStatus.UNAUTHORIZED,
-  );
-}
     const currentYear = new Date().getFullYear();
     const nssNumberWithYear = `${nssNumber}${currentYear}`;
+    const normalizedEmail = email.trim();
+
+    const [existingByNss, existingByEmail] = await Promise.all([
+      this.prisma.user.findFirst({
+        where: {
+          deletedAt: null,
+          OR: [
+            { nssNumber: { equals: nssNumber, mode: 'insensitive' } },
+            { nssNumber: { equals: nssNumberWithYear, mode: 'insensitive' } },
+          ],
+        },
+      }),
+      this.prisma.user.findFirst({
+        where: {
+          deletedAt: null,
+          email: { equals: normalizedEmail, mode: 'insensitive' },
+        },
+      }),
+    ]);
+
+    if (existingByEmail && existingByEmail.role !== 'PERSONNEL') {
+      throw new HttpException(
+        'This email is already used by a staff account. Enter the personnel email address.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (existingByNss && existingByNss.role !== 'PERSONNEL') {
+      throw new HttpException('NSS number already registered', HttpStatus.BAD_REQUEST);
+    }
+
+    if (existingByNss && existingByEmail && existingByNss.id !== existingByEmail.id) {
+      throw new HttpException(
+        'This NSS number and email belong to different accounts.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const existingPersonnel = existingByNss ?? existingByEmail;
+    if (existingPersonnel) {
+      await this.renewOnboardingToken(existingPersonnel.id, initiatedBy.id);
+      return {
+        message: 'This personnel already has an account. A new onboarding link was sent to their email.',
+        email: existingPersonnel.email,
+      };
+    }
 
     const user = await this.usersService.createUser({
       nssNumber: nssNumberWithYear,
-      email,
+      email: normalizedEmail,
       phoneNumber,
       role: 'PERSONNEL',
     });
@@ -248,7 +284,14 @@ async loginStaffAdmin(staffId: string, password: string) {
       },
     });
 
-    await this.notificationsService.sendOnboardingEmail(email, nssNumberWithYear, token);
+    try {
+      await this.notificationsService.sendOnboardingEmail(email, nssNumberWithYear, token);
+    } catch {
+      throw new HttpException(
+        'The personnel account was created, but the onboarding email could not be sent. The email queue is not reachable.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
 
     return { message: 'Onboarding link sent to email', email };
   }
@@ -333,7 +376,7 @@ async loginStaffAdmin(staffId: string, password: string) {
       include: { OnboardingToken: true },
     });
 
-    if (!user || !user.OnboardingToken.length) {
+    if (!user || !user.nssNumber) {
       throw new HttpException('User not found or not onboarded', HttpStatus.NOT_FOUND);
     }
 
@@ -515,7 +558,7 @@ async loginStaffAdmin(staffId: string, password: string) {
   if (!user) {
     throw new HttpException('User not found', HttpStatus.BAD_REQUEST);
   }
-  // await this.smsService.sendOtp(userId);
+  await this.smsService.sendOtp(userId);
   return { message: 'OTP resent to your phone' };
   }
 

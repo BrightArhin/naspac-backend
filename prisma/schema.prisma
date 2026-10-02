@@ -64,6 +64,10 @@ model Submission {
   appointmentLetterUrl String
   verificationFormUrl String?
   jobConfirmationLetterUrl String?
+  uploadRejected      Boolean       @default(false)
+  uploadRejectionReason String?
+  verificationRejected Boolean      @default(false)
+  verificationRejectionReason String?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
   deletedAt           DateTime?

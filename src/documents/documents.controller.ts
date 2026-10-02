@@ -3,7 +3,7 @@ import { PrismaService } from 'prisma/prisma.service';
 import { JwtAuthGuard } from 'src/common/guards/auth-guard';
 import { RolesGuard } from 'src/common/guards/roles-guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
-import { DocumentsService } from './documents.service';
+import { DocumentsService, EndorsePlacements } from './documents.service';
 import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 
@@ -18,10 +18,10 @@ export class DocumentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
   async signDocument(
-    @Body() body: { submissionId: number; documentType: 'postingLetter' | 'appointmentLetter' },
+    @Body() body: { submissionId: number; documentType?: 'postingLetter' | 'appointmentLetter'; pages?: number[]; placements?: Partial<EndorsePlacements> },
     @Request() req,
   ) {
-    const { submissionId, documentType } = body;
+    const { submissionId, pages, placements } = body;
 
     // Validate submission
     const submission = await this.prisma.submission.findUnique({
@@ -33,6 +33,9 @@ export class DocumentsController {
     }
     if (submission.status !== 'PENDING_ENDORSEMENT') {
       throw new HttpException('Submission not ready for endorsement', HttpStatus.BAD_REQUEST);
+    }
+    if (submission.uploadRejected) {
+      throw new HttpException('This posting and appointment letter was rejected and is waiting for a new PDF', HttpStatus.BAD_REQUEST);
     }
 
     const admin = await this.prisma.user.findUnique({
@@ -59,12 +62,12 @@ export class DocumentsController {
       return url;
     };
 
-    const rawUrl = documentType === 'postingLetter' ? submission.postingLetterUrl : submission.appointmentLetterUrl;
+    const rawUrl = submission.appointmentLetterUrl || submission.postingLetterUrl;
     const fileName = normalizeToFileKey(rawUrl);
 console.log('Raw URL:', submission.appointmentLetterUrl, 'Parsed fileName:', fileName);
 
     if (!fileName) {
-      throw new HttpException(`No ${documentType} found for submission`, HttpStatus.BAD_REQUEST);
+      throw new HttpException('No posting and appointment letter found for submission', HttpStatus.BAD_REQUEST);
     }
 
     // Sign document
@@ -75,10 +78,12 @@ console.log('Raw URL:', submission.appointmentLetterUrl, 'Parsed fileName:', fil
       admin.signage,
       admin.stamp,
       rawUrl,
+      pages,
+      placements,
     );
 
     return {
-      message: `${documentType} signed successfully`,
+      message: `Posting and appointment letter signed successfully`,
       signedUrl,
       documentId,
     };
@@ -148,7 +153,7 @@ async downloadAppointmentLetter(
     }
     cb(null, true);
   },
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 },
 }))
 async uploadTemplate(
   @Request() req,

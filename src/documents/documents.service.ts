@@ -9,6 +9,57 @@ import { NotificationsService } from 'src/notifications/notifications.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 
+export type EndorseBox = {
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  size?: number;
+};
+
+export type EndorsePlacements = {
+  date: EndorseBox;
+  signature: EndorseBox;
+  stamp: EndorseBox;
+  company: EndorseBox;
+  email: EndorseBox;
+  phone1: EndorseBox;
+  phone2: EndorseBox;
+};
+
+const defaultPlacements: EndorsePlacements = {
+  date: { x: 0.36, y: 0.52, size: 20 },
+  signature: { x: 0.28, y: 0.58, width: 0.18, height: 0.1 },
+  stamp: { x: 0.5, y: 0.58, width: 0.16, height: 0.12 },
+  company: { x: 0.3, y: 0.46, size: 18 },
+  email: { x: 0.3, y: 0.52, size: 16 },
+  phone1: { x: 0.3, y: 0.56, size: 16 },
+  phone2: { x: 0.3, y: 0.6, size: 16 },
+};
+
+const placementNumber = (value: unknown, fallback: number) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+};
+
+const mergeBox = (fallback: EndorseBox, input?: Partial<EndorseBox>): EndorseBox => ({
+  x: Math.min(0.92, Math.max(0, placementNumber(input?.x, fallback.x))),
+  y: Math.min(0.92, Math.max(0, placementNumber(input?.y, fallback.y))),
+  width: Math.min(0.6, Math.max(0.05, placementNumber(input?.width, fallback.width || 0.18))),
+  height: Math.min(0.4, Math.max(0.04, placementNumber(input?.height, fallback.height || 0.1))),
+  size: Math.min(72, Math.max(10, placementNumber(input?.size, fallback.size || 16))),
+});
+
+const mergePlacements = (input?: Partial<EndorsePlacements>): EndorsePlacements => ({
+  date: mergeBox(defaultPlacements.date, input?.date),
+  signature: mergeBox(defaultPlacements.signature, input?.signature),
+  stamp: mergeBox(defaultPlacements.stamp, input?.stamp),
+  company: mergeBox(defaultPlacements.company, input?.company),
+  email: mergeBox(defaultPlacements.email, input?.email),
+  phone1: mergeBox(defaultPlacements.phone1, input?.phone1),
+  phone2: mergeBox(defaultPlacements.phone2, input?.phone2),
+});
+
 @Injectable()
 export class DocumentsService {
   constructor(
@@ -25,14 +76,19 @@ async signDocument(
   signatureImagePath?: string,
   stampImagePath?: string,
   originalUrl?: string,
+  pages?: number[],
+  placements?: Partial<EndorsePlacements>,
 ) {
   try {
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
-      select: { id: true, status: true, userId: true, user: { select: { nssNumber: true, email: true, name: true } }, appointmentLetterUrl: true, postingLetterUrl: true, createdAt: true },
+      select: { id: true, status: true, uploadRejected: true, userId: true, user: { select: { nssNumber: true, email: true, name: true } }, appointmentLetterUrl: true, postingLetterUrl: true, createdAt: true },
     });
     if (!submission || submission.status !== 'PENDING_ENDORSEMENT') {
       throw new Error('Submission not found or not ready for endorsement');
+    }
+    if (submission.uploadRejected) {
+      throw new Error('This posting and appointment letter was rejected and is waiting for a new PDF');
     }
 
     console.log('Fetching file for signing:', { fileName });
@@ -56,132 +112,98 @@ async signDocument(
     }
 
     const pdfDoc = await PDFDocument.load(fileBuffer);
-
-    if (pdfDoc.getPageCount() < 4) {
-      throw new Error('Appointment letter must have at least 4 pages');
+    const pageCount = pdfDoc.getPageCount();
+    const requestedPages = (pages && pages.length ? pages : [4, 5])
+      .map((page) => Number(page))
+      .filter((page) => Number.isInteger(page) && page > 0);
+    const endorsePages = [...new Set(requestedPages)].sort((a, b) => a - b);
+    if (endorsePages.length === 0) {
+      throw new Error('Select at least one page to endorse');
+    }
+    if (endorsePages.some((page) => page > pageCount)) {
+      throw new Error(`This PDF has ${pageCount} page${pageCount === 1 ? '' : 's'}. Choose pages between 1 and ${pageCount}.`);
     }
 
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-    const thirdPage = pdfDoc.getPage(2);
-    const { width, height } = thirdPage.getSize();
+    const signaturePages = endorsePages.length === 1 ? endorsePages : endorsePages.slice(0, -1);
+    const contactPage = endorsePages.length > 1 ? endorsePages[endorsePages.length - 1] : null;
 
-    // Detect page size (A4 or A5)
-    const isA4 = Math.abs(width - 595) < 5 && Math.abs(height - 842) < 5; // Allow small tolerance for floating-point
-    const isA5 = Math.abs(width - 420) < 5 && Math.abs(height - 595) < 5;
-    console.log('Page size detection', { isA4, isA5 });
+    const embedImage = async (imageBuffer: Buffer) => {
+      const header = imageBuffer.subarray(0, 3).toString('hex');
+      if (header.startsWith('ffd8ff')) {
+        return pdfDoc.embedJpg(imageBuffer);
+      }
+      return pdfDoc.embedPng(imageBuffer);
+    };
 
-    if (!isA4 && !isA5) {
-      console.warn(`Unexpected page size: ${width}x${height} points`);
-      // throw new Error('Document page size is neither A4 nor A5');
+    let signatureImage: Awaited<ReturnType<typeof embedImage>> | null = null;
+    let stampImage: Awaited<ReturnType<typeof embedImage>> | null = null;
+    if (signatureImagePath && stampImagePath) {
+      const signatureImageBuffer = await this.localStorageService.getFile(signatureImagePath);
+      const stampImageBuffer = await this.localStorageService.getFile(stampImagePath);
+      signatureImage = await embedImage(signatureImageBuffer);
+      stampImage = await embedImage(stampImageBuffer);
     }
 
-    const sigWidth = 120;
-    const sigHeight = 120;
-    const centerX = (width - sigWidth) / 2;
-    const centerY = height / 2;
-    const verticalOffset = 40;
-    let adjustedY = centerY - verticalOffset;
-
-    // Adjust Y-coordinate for A4 by shifting placements downward
-    const yShift = isA4 ? 135 : 0; // Shift down by 135 points for A4
-    adjustedY -= yShift;
-
-    // Add submission date
-    const submissionDate = new Date().toLocaleDateString('en-US', {
+    const placed = mergePlacements(placements);
+    const reportingDate = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
       day: '2-digit',
       year: '2-digit',
     });
-    thirdPage.drawText(`${submissionDate}`, {
-      x: centerX,
-      y: adjustedY + 135,
-      size: 12,
-      font,
-      color: rgb(0, 0, 0),
-    });
 
-    if (signatureImagePath && stampImagePath) {
-      const signatureImageBuffer = await this.localStorageService.getFile(signatureImagePath);
-      const stampImageBuffer = await this.localStorageService.getFile(stampImagePath);
-
-      console.log('Signature buffer size:', signatureImageBuffer.length);
-      console.log('Stamp buffer size:', stampImageBuffer.length);
-
-      const signatureImage = await pdfDoc.embedPng(signatureImageBuffer);
-      const stampImage = await pdfDoc.embedPng(stampImageBuffer);
-
-      thirdPage.drawImage(signatureImage, {
-        x: centerX,
-        y: adjustedY,
-        width: sigWidth,
-        height: sigHeight,
-      });
-      thirdPage.drawImage(stampImage, {
-        x: centerX,
-        y: adjustedY,
-        width: sigWidth,
-        height: sigHeight,
-      });
-    } else {
-      // Fallback coordinates, adjusted for A4
-      thirdPage.drawText(`${submissionDate}`, {
-        x: 54,
-        y: 240 - yShift,
-        size: 12,
+    const drawText = (page: ReturnType<typeof pdfDoc.getPage>, text: string, box: EndorseBox) => {
+      const { width, height } = page.getSize();
+      const size = box.size || 16;
+      page.drawText(text, {
+        x: box.x * width,
+        y: height - box.y * height - size,
+        size,
         font,
         color: rgb(0, 0, 0),
       });
-      thirdPage.drawText(`Signed by Admin ID: ${adminId}`, {
-        x: 54,
-        y: 53 - yShift,
-        size: 12,
-        font,
-        color: rgb(0, 0, 0),
+    };
+
+    const drawFittedImage = (
+      page: ReturnType<typeof pdfDoc.getPage>,
+      image: NonNullable<typeof signatureImage>,
+      box: EndorseBox,
+    ) => {
+      const { width, height } = page.getSize();
+      const boxWidth = (box.width || 0.18) * width;
+      const boxHeight = (box.height || 0.1) * height;
+      const scale = Math.min(boxWidth / image.width, boxHeight / image.height);
+      const drawWidth = image.width * scale;
+      const drawHeight = image.height * scale;
+      page.drawImage(image, {
+        x: box.x * width,
+        y: height - box.y * height - drawHeight,
+        width: drawWidth,
+        height: drawHeight,
       });
+    };
+
+    const drawSignature = (pageNumber: number) => {
+      const page = pdfDoc.getPage(pageNumber - 1);
+      drawText(page, reportingDate, placed.date);
+      if (signatureImage && stampImage) {
+        drawFittedImage(page, signatureImage, placed.signature);
+        drawFittedImage(page, stampImage, placed.stamp);
+      } else {
+        drawText(page, `Signed by Admin ID: ${adminId}`, placed.signature);
+      }
+    };
+
+    signaturePages.forEach(drawSignature);
+
+    if (contactPage) {
+      const fourthPage = pdfDoc.getPage(contactPage - 1);
+      drawText(fourthPage, 'GHANA COCOA BOARD', placed.company);
+      drawText(fourthPage, 'cocobod@cocobod.gh', placed.email);
+      drawText(fourthPage, '0302 - 661 - 752', placed.phone1);
+      drawText(fourthPage, '0302 - 661 - 872', placed.phone2);
     }
-
-    // Fourth page
-    const fourthPage = pdfDoc.getPage(3);
-    const emailText = 'cocobod@cocobod.gh';
-    const phone1Text = '0302 - 661 - 752';
-    const phone2Text = '0302 - 661 - 872';
-    const headerText = 'GHANA COCOA BOARD';
-
-    const a4FourthPageShift = isA4 ? 50 : 0;
-    const baseY = adjustedY + 75.83 - a4FourthPageShift;
-
-    fourthPage.drawText(emailText, {
-      x: centerX,
-      y: baseY,
-      size: 12,
-      font,
-      color: rgb(0, 0, 0),
-    });
-
-    fourthPage.drawText(phone1Text, {
-      x: centerX,
-      y: baseY - 14.17,
-      size: 12,
-      font,
-      color: rgb(0, 0, 0),
-    });
-
-    fourthPage.drawText(phone2Text, {
-      x: centerX,
-      y: baseY - 28.34,
-      size: 12,
-      font,
-      color: rgb(0, 0, 0),
-    });
-
-    fourthPage.drawText(headerText, {
-      x: centerX,
-      y: baseY + 71.00,
-      size: 12,
-      font,
-      color: rgb(0, 0, 0),
-    });
 
     const modifiedPdfBuffer = Buffer.from(await pdfDoc.save());
 
@@ -197,12 +219,8 @@ async signDocument(
       where: { id: submissionId },
       data: {
         status: 'ENDORSED',
-        appointmentLetterUrl: submission.appointmentLetterUrl && fileName.includes('appointment')
-          ? signedUrl
-          : submission.appointmentLetterUrl,
-        postingLetterUrl: submission.postingLetterUrl && fileName.includes('posting')
-          ? signedUrl
-          : submission.postingLetterUrl,
+        appointmentLetterUrl: signedUrl,
+        postingLetterUrl: signedUrl,
       },
     });
 
@@ -222,7 +240,7 @@ async signDocument(
         submissionId,
         action: 'STATUS_CHANGED_TO_ENDORSED',
         userId: adminId,
-        details: `Document ${signedFileName} signed for submission ${submissionId}`,
+        details: `Posting and appointment letter endorsed on pages ${endorsePages.join(', ')} for submission ${submissionId}`,
       },
     });
 
@@ -265,13 +283,14 @@ async signDocument(
     );
     return { signedUrl, documentId: document.id };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Error signing PDF:', {
       submissionId,
       fileName,
-      error: error.message,
-      stack: error.stack,
+      error: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined,
     });
-    throw new Error(`Failed to sign PDF: ${error.message}`);
+    throw new Error(`Failed to sign PDF: ${errorMessage}`);
   }
 }
 
