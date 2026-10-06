@@ -33,7 +33,7 @@ async getUserProfile(@Request() req) {
 
   @Post('upload-signage')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @Roles('SUPERADMIN')
   @UseInterceptors(
     FilesInterceptor('files', 2, {
       fileFilter: (req, file, cb) => {
@@ -48,8 +48,26 @@ async getUserProfile(@Request() req) {
   async uploadSignage(
     @Request() req,
     @UploadedFiles() files: Array<Express.Multer.File>,
+    @Body('assigneeId') assigneeId: string,
   ) {
-    const adminId = req.user.id;
+    const targetId = Number(assigneeId);
+    if (!targetId) {
+      throw new HttpException(
+        'Choose the admin who will use this signature and stamp',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const assignee = await this.prisma.user.findFirst({
+      where: { id: targetId, deletedAt: null, role: 'ADMIN' },
+      select: { id: true, name: true },
+    });
+    if (!assignee) {
+      throw new HttpException(
+        'The endorsement signature and stamp can only be assigned to an admin',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const adminId = assignee.id;
 
     const signatureFile = files.find((f) => f.originalname.includes('signature'));
     const stampFile = files.find((f) => f.originalname.includes('stamp'));
@@ -90,7 +108,7 @@ async getUserProfile(@Request() req) {
     });
 
     return {
-      message: 'Signature and stamp uploaded successfully',
+      message: `Signature and stamp assigned to ${assignee.name || 'the admin'}`,
       signatureUrl,
       stampUrl,
     };
@@ -324,7 +342,7 @@ async updateDepartment(
 
     @Post('upload-appointment-signature')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'STAFF')
+  @Roles('SUPERADMIN')
   @UseInterceptors(FileInterceptor('signature', {
     fileFilter: (req, file, cb) => {
       if (!['image/png', 'image/jpeg'].includes(file.mimetype)) {

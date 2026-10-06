@@ -414,7 +414,7 @@ async signDocument(
     where: { id: userId },
     select: { id: true, role: true },
   });
-  if (!user || user.role !== 'ADMIN') {
+  if (!user || (user.role !== 'ADMIN' && user.role !== 'SUPERADMIN')) {
     throw new HttpException('Only ADMIN can upload templates', HttpStatus.FORBIDDEN);
   }
 
@@ -471,11 +471,12 @@ async signDocument(
       throw new HttpException('User not found or deleted', HttpStatus.NOT_FOUND);
     }
 
+    const audience = role === 'SUPERADMIN' ? 'ADMIN' : role;
     const notifications = await this.prisma.notification.findMany({
     where: {
       OR: [
-        { role, userId: role === 'PERSONNEL' ? userId : undefined },
-        { userId, role }, // User-specific notifications
+        { role: audience, userId: audience === 'PERSONNEL' ? userId : undefined },
+        { userId, role: audience },
       ],
     },
       orderBy: { timestamp: 'desc' },
@@ -499,7 +500,7 @@ async signDocument(
     where: { id: userId },
     select: { id: true, role: true, name: true },
   });
-  if (!user || !['ADMIN', 'STAFF'].includes(user.role)) {
+  if (!user || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(user.role)) {
     throw new HttpException('Unauthorized: Only ADMIN or STAFF can send appointment letters', HttpStatus.FORBIDDEN);
   }
 
@@ -568,7 +569,7 @@ async signDocument(
         description: `Appointment letter sent for submission (ID: ${submissionId}, NSS: ${submission.nssNumber}) by ${user.name}.`,
         timestamp: new Date(),
         iconType: 'SETTING',
-        role: user.role === 'ADMIN' ? 'ADMIN' : 'STAFF',
+        role: user.role === 'ADMIN' || user.role === 'SUPERADMIN' ? 'ADMIN' : 'STAFF',
       },
     });
 

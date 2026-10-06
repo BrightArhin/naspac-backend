@@ -155,7 +155,7 @@ export class AuthController {
   async deleteOnboardedUser(@Param('id') id: string, @Request() req) {
     try {
       const userRole = req.user.role;
-      if (!['STAFF', 'ADMIN'].includes(userRole)) {
+      if (!['STAFF', 'ADMIN', 'SUPERADMIN'].includes(userRole)) {
         throw new HttpException(
           'Unauthorized: Only staff or admins can delete users',
           HttpStatus.FORBIDDEN,
@@ -176,7 +176,7 @@ export class AuthController {
   async renewOnboardingToken(@Param('id') id: string, @Request() req) {
     try {
       const userRole = req.user.role;
-      if (!['STAFF', 'ADMIN'].includes(userRole)) {
+      if (!['STAFF', 'ADMIN', 'SUPERADMIN'].includes(userRole)) {
         throw new HttpException(
           'Unauthorized: Only staff or admins can renew tokens',
           HttpStatus.FORBIDDEN,

@@ -696,11 +696,12 @@ async updateSubmissionStatus(
  where: { id: userId, deletedAt: null },
  select: { role: true, name: true }
  });
- if (!user || !['ADMIN', 'STAFF'].includes(user.role)) {
+ if (!user || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(user.role)) {
  throw new HttpException('Unauthorized: Only ADMIN or STAFF can update submission status', HttpStatus.FORBIDDEN);
  }
  if (
    user.role !== 'ADMIN' &&
+   user.role !== 'SUPERADMIN' &&
    (dto.status === 'PENDING_ENDORSEMENT' || dto.status === 'REJECTED')
  ) {
    throw new HttpException(
@@ -784,30 +785,26 @@ async updateSubmissionStatus(
     throw new HttpException(`User ${userId} not found`, HttpStatus.NOT_FOUND);
   }
 
-  if (!['ADMIN', 'STAFF'].includes(currentUser.role)) {
+  if (!['ADMIN', 'STAFF', 'SUPERADMIN'].includes(currentUser.role)) {
     throw new HttpException(
       `User ${userId} is not authorized to validate submissions`,
       HttpStatus.FORBIDDEN,
     );
   }
 
-  let signaturePath: string | null = currentUser.signaturePath;
-
-  if (!signaturePath) {
-    const adminUser = await prisma.user.findFirst({
-      where: {
-        role: 'ADMIN',
-        deletedAt: null,
-        signaturePath: { not: null },
-      },
-      select: { signaturePath: true },
-    });
-    signaturePath = adminUser?.signaturePath || null;
-  }
+  const appointmentSigner = await prisma.user.findFirst({
+    where: {
+      role: 'SUPERADMIN',
+      deletedAt: null,
+      signaturePath: { not: null },
+    },
+    select: { signaturePath: true },
+  });
+  const signaturePath = appointmentSigner?.signaturePath || null;
 
   if (!signaturePath) {
     throw new HttpException(
-      'Upload the appointment letter signature on Profile. The signature used to endorse a posting letter is not printed on this letter.',
+      'The superadmin must upload the appointment letter signature before a letter can be validated.',
       HttpStatus.BAD_REQUEST,
     );
   }
@@ -905,7 +902,7 @@ const referenceNumber = `BOD/${yearPart}/${nssPart}`;
  description: `Submission (ID: ${submissionId}, NSS: ${submission.nssNumber}) rejected by ${user.name}.`,
  timestamp: new Date(),
  iconType: 'SETTING',
- role: user.role === 'ADMIN' ? 'ADMIN' : 'STAFF',
+ role: user.role === 'ADMIN' || user.role === 'SUPERADMIN' ? 'ADMIN' : 'STAFF',
  },
  });
 
@@ -959,7 +956,7 @@ const referenceNumber = `BOD/${yearPart}/${nssPart}`;
  description: `Submission (ID: ${submissionId}, NSS: ${submission.nssNumber}) status changed to ${dto.status} by ${user.name}.`,
  timestamp: new Date(),
  iconType: 'SETTING',
- role: user.role === 'ADMIN' ? 'ADMIN' : 'STAFF',
+ role: user.role === 'ADMIN' || user.role === 'SUPERADMIN' ? 'ADMIN' : 'STAFF',
  },
  });
 
@@ -973,8 +970,8 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     where: { id: userId, deletedAt: null },
     select: { id: true, role: true, name: true },
   });
-  if (!user || !['ADMIN', 'STAFF'].includes(user.role)) {
-    throw new HttpException('Unauthorized: Only ADMIN or STAFF can upload signatures', HttpStatus.FORBIDDEN);
+  if (!user || user.role !== 'SUPERADMIN') {
+    throw new HttpException('Only the superadmin can upload the appointment letter signature', HttpStatus.FORBIDDEN);
   }
 
   // Validate file type
@@ -1050,7 +1047,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
 
   async getSubmissionStatusCounts(userId: number, dto: GetSubmissionStatusCountsDto) {
   const user = await this.prisma.user.findUnique({ where: { id: userId, deletedAt: null } });
-  if (!user || !['ADMIN', 'STAFF'].includes(user.role)) {
+  if (!user || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(user.role)) {
     throw new HttpException(
       'Unauthorized: Only ADMIN or STAFF can access submission status counts',
       HttpStatus.FORBIDDEN,
@@ -1102,7 +1099,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
 
  async getStaff(requesterId: number) {
   const requester = await this.prisma.user.findUnique({ where: { id: requesterId, deletedAt: null } });
-  if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+  if (!requester || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException(
       'Unauthorized: Only admins or staff can access staff, admin, and supervisor data',
       HttpStatus.FORBIDDEN,
@@ -1141,7 +1138,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
 
  async createDepartment(requesterId: number, dto: CreateDepartmentDto) {
   const requester = await this.prisma.user.findUnique({ where: { id: requesterId, deletedAt: null } });
-  if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+  if (!requester || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException('Unauthorized: Only admins and staff can create departments', HttpStatus.FORBIDDEN);
   }
 
@@ -1206,7 +1203,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
 
  async getDepartments(requesterId: number) {
   const requester = await this.prisma.user.findUnique({ where: { id: requesterId, deletedAt: null } });
-  if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+  if (!requester || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException('Unauthorized: Only admins or staff can access departments', HttpStatus.FORBIDDEN);
   }
 
@@ -1229,7 +1226,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
 
   async getPersonnel(requesterId: number, dto: GetPersonnelDto) {
   const requester = await this.prisma.user.findUnique({ where: { id: requesterId, deletedAt: null } });
-  if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+  if (!requester || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException(
       'Unauthorized: Only admins or staff can access personnel data',
       HttpStatus.FORBIDDEN,
@@ -1320,7 +1317,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     where: { id: requesterId, deletedAt: null },
     select: { id: true, role: true },
   });
-  if (!requester || requester.role !== 'ADMIN') {
+  if (!requester || !['ADMIN', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException(
       'Unauthorized: Only an admin can assign personnel to a department',
       HttpStatus.FORBIDDEN,
@@ -1416,7 +1413,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
       where: { id: requesterId, deletedAt: null },
       select: { id: true, role: true },
     });
-    if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+    if (!requester || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(requester.role)) {
       throw new HttpException(
         'Unauthorized: Only ADMIN or STAFF can access report counts',
         HttpStatus.FORBIDDEN,
@@ -1621,10 +1618,10 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
       where: { id: requesterId, deletedAt: null },
       select: { id: true, role: true, name: true },
     });
-    if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+    if (!requester || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(requester.role)) {
       throw new HttpException('Only staff or admins can reject an upload', HttpStatus.FORBIDDEN);
     }
-    if (target === 'letter' && requester.role !== 'ADMIN' && requester.role !== 'STAFF') {
+    if (target === 'letter' && !['ADMIN', 'SUPERADMIN'].includes(requester.role) && requester.role !== 'STAFF') {
       throw new HttpException('Unauthorized', HttpStatus.FORBIDDEN);
     }
 
@@ -1796,7 +1793,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     where: { id: requesterId, deletedAt: null },
     select: { role: true },
   });
-  if (!requester || requester.role !== 'ADMIN') {
+  if (!requester || !['ADMIN', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException('Only ADMIN can update staff information', HttpStatus.FORBIDDEN);
   }
 
@@ -1901,7 +1898,7 @@ async updateDepartment(departmentId: number, dto: UpdateDepartmentDto, requester
     where: { id: requesterId, deletedAt: null },
     select: { role: true },
   });
-  if (!requester || requester.role !== 'ADMIN') {
+  if (!requester || !['ADMIN', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException('Only ADMIN can update department information', HttpStatus.FORBIDDEN);
   }
 
@@ -1976,7 +1973,7 @@ async deleteStaff(staffId: number, requesterId: number) {
     where: { id: requesterId, deletedAt: null },
     select: { role: true },
   });
-  if (!requester || requester.role !== 'ADMIN') {
+  if (!requester || !['ADMIN', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException('Only ADMIN can delete staff', HttpStatus.FORBIDDEN);
   }
 
@@ -2051,7 +2048,7 @@ async deleteStaff(staffId: number, requesterId: number) {
     where: { id: requesterId, deletedAt: null },
     select: { role: true },
   });
-  if (!requester || requester.role !== 'ADMIN') {
+  if (!requester || !['ADMIN', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException('Only ADMIN can delete departments', HttpStatus.FORBIDDEN);
   }
 
@@ -2122,7 +2119,7 @@ async deleteStaff(staffId: number, requesterId: number) {
     where: { id: requesterId, deletedAt: null },
     select: { role: true },
   });
- if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+ if (!requester || !['ADMIN', 'STAFF', 'SUPERADMIN'].includes(requester.role)) {
     throw new HttpException('Only ADMIN or STAFF can change personnel departments', HttpStatus.FORBIDDEN);
   }
 

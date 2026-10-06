@@ -100,6 +100,7 @@ export class AuthService {
     if (
       user.role !== 'STAFF' &&
       user.role !== 'ADMIN' &&
+      user.role !== 'SUPERADMIN' &&
       user.role !== 'SUPERVISOR'
     ) {
       throw new HttpException(
@@ -287,8 +288,9 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
     if (
       !user.staffId &&
-      (user.role === 'STAFF' ||
+      (        user.role === 'STAFF' ||
         user.role === 'ADMIN' ||
+        user.role === 'SUPERADMIN' ||
         user.role === 'SUPERVISOR')
     ) {
       throw new HttpException(
@@ -399,7 +401,7 @@ export class AuthService {
     initiatedBy: { id: number; role: string },
     phoneNumber: string,
   ) {
-    if (!['STAFF', 'ADMIN'].includes(initiatedBy.role)) {
+    if (!['STAFF', 'ADMIN', 'SUPERADMIN'].includes(initiatedBy.role)) {
       throw new HttpException(
         'Unauthorized: Only staff or admins can initiate onboarding',
         HttpStatus.FORBIDDEN,
@@ -732,7 +734,7 @@ export class AuthService {
     phoneNumber?: string,
     enable2FA?: boolean,
   ) {
-    if (initiatedBy.role !== 'ADMIN') {
+    if (initiatedBy.role !== 'ADMIN' && initiatedBy.role !== 'SUPERADMIN') {
       throw new HttpException(
         'Unauthorized: Only admins can initiate user creation',
         HttpStatus.FORBIDDEN,

@@ -192,6 +192,7 @@ enum Role {
   PERSONNEL
   STAFF
   ADMIN
+  SUPERADMIN
   SUPERVISOR
 }
 

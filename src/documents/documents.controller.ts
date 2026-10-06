@@ -43,7 +43,7 @@ export class DocumentsController {
     });
     if (!admin || !admin.signage || !admin.stamp) {
       throw new HttpException(
-        'Admin signature or stamp not configured',
+        'Your endorsement signature and stamp have not been assigned yet. Ask the superadmin to upload them and assign them to you.',
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -104,7 +104,11 @@ console.log('Raw URL:', submission.appointmentLetterUrl, 'Parsed fileName:', fil
       throw new HttpException('Submission not found', HttpStatus.NOT_FOUND);
     }
 
-    if (req.user.role !== 'ADMIN' && submission.userId !== req.user.id) {
+    if (
+      req.user.role !== 'ADMIN' &&
+      req.user.role !== 'SUPERADMIN' &&
+      submission.userId !== req.user.id
+    ) {
       throw new HttpException('Unauthorized access to submission', HttpStatus.FORBIDDEN);
     }
 
