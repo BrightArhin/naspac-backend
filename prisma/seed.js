@@ -12,7 +12,7 @@ async function main() {
   await prisma.user.deleteMany();
 
   // Seed Admins
-   await prisma.user.create({
+  await prisma.user.create({
     data: {
       name: 'Admin One',
       staffId: 'admin123',
