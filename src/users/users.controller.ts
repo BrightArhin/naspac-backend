@@ -81,7 +81,6 @@ async getUserProfile(@Request() req) {
       where: { id: adminId },
       data: {
         signage: signatureFileName,
-        signaturePath: signatureFileName,
         stamp: stampFileName,
         sigWidth: 100,
         sigHeight: 50,
@@ -236,7 +235,7 @@ async getUserProfile(@Request() req) {
 
   @Post('assign-personnel-to-department')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('ADMIN', 'STAFF')
+@Roles('ADMIN')
 async assignPersonnelToDepartment(
   @Request() req,
   @Body() dto: AssignPersonnelToDepartmentDto,

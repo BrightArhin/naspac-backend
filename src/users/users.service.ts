@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { LocalStorageService } from 'src/documents/local-storage.service';
 import { buildJobConfirmationLetterDocDefinition } from 'src/templates/jobConfirmationLetter.template';
+import sharp from 'sharp';
 
 // function getBase64Image(filePath: string): string {
 //   const absPath = path.resolve(filePath);
@@ -34,17 +35,32 @@ function readStoredFile(filePath: string): Buffer {
   }
 
   const cwd = process.cwd();
-  const possiblePaths = [
-    path.resolve(cwd, "storage", normalizedPath),
-    path.resolve(cwd, "files", normalizedPath),
-    path.resolve(normalizedPath),
-    path.resolve("src", normalizedPath),
-    path.resolve("dist/src", normalizedPath),
-    path.resolve(baseStoragePath, normalizedPath),
-    path.resolve(baseStoragePath, "files", normalizedPath),
-    path.resolve(baseStoragePath, "assets", normalizedPath),
-    path.resolve(baseStoragePath, "storage", normalizedPath),
-  ];
+  const productionFiles = path.resolve(baseStoragePath, "files", normalizedPath);
+  const localStorage = path.resolve(cwd, "storage", normalizedPath);
+  const bundledAsset = normalizedPath.startsWith("src/")
+    ? path.resolve(cwd, "dist", normalizedPath)
+    : path.resolve(cwd, "dist/src", normalizedPath);
+  const possiblePaths = process.env.NODE_ENV === "production"
+    ? [
+        productionFiles,
+        path.resolve(cwd, "files", normalizedPath),
+        path.resolve(baseStoragePath, normalizedPath),
+        path.resolve(cwd, normalizedPath),
+        bundledAsset,
+        path.resolve(cwd, "src", normalizedPath),
+        localStorage,
+      ]
+    : [
+        localStorage,
+        path.resolve(cwd, "files", normalizedPath),
+        path.resolve(cwd, normalizedPath),
+        path.resolve(cwd, "src", normalizedPath),
+        bundledAsset,
+        productionFiles,
+        path.resolve(baseStoragePath, normalizedPath),
+        path.resolve(baseStoragePath, "assets", normalizedPath),
+        path.resolve(baseStoragePath, "storage", normalizedPath),
+      ];
 
   for (const absPath of possiblePaths) {
     console.log(`Trying path: ${absPath}`);
@@ -66,11 +82,10 @@ function getBase64Image(filePath: string): string {
   return readStoredFile(filePath).toString('base64');
 }
 
-function imageToDataUrl(filePath: string): string {
+async function imageToDataUrl(filePath: string): Promise<string> {
   const file = readStoredFile(filePath);
-  const header = file.subarray(0, 3).toString('hex');
-  const mime = header.startsWith('ffd8ff') ? 'image/jpeg' : 'image/png';
-  return `data:${mime};base64,${file.toString('base64')}`;
+  const png = await sharp(file).rotate().png().toBuffer();
+  return `data:image/png;base64,${png.toString('base64')}`;
 }
 
 (pdfMake as any).vfs = pdfFonts.vfs;
@@ -684,6 +699,15 @@ async updateSubmissionStatus(
  if (!user || !['ADMIN', 'STAFF'].includes(user.role)) {
  throw new HttpException('Unauthorized: Only ADMIN or STAFF can update submission status', HttpStatus.FORBIDDEN);
  }
+ if (
+   user.role !== 'ADMIN' &&
+   (dto.status === 'PENDING_ENDORSEMENT' || dto.status === 'REJECTED')
+ ) {
+   throw new HttpException(
+     'Only an admin can shortlist personnel or reject them completely',
+     HttpStatus.FORBIDDEN,
+   );
+ }
 
  const submission = await this.prisma.submission.findUnique({
  where: { id: submissionId },
@@ -753,7 +777,7 @@ async updateSubmissionStatus(
 
   const currentUser = await prisma.user.findUnique({
     where: { id: userId, deletedAt: null },
-    select: { role: true, signaturePath: true, signage: true },
+    select: { role: true, signaturePath: true },
   });
 
   if (!currentUser) {
@@ -767,25 +791,23 @@ async updateSubmissionStatus(
     );
   }
 
-  let signaturePath: string | null = currentUser.signaturePath || currentUser.signage;
+  let signaturePath: string | null = currentUser.signaturePath;
 
   if (!signaturePath) {
     const adminUser = await prisma.user.findFirst({
       where: {
         role: 'ADMIN',
         deletedAt: null,
-        OR: [{ signaturePath: { not: null } }, { signage: { not: null } }],
+        signaturePath: { not: null },
       },
-      select: { signaturePath: true, signage: true },
+      select: { signaturePath: true },
     });
-    signaturePath = adminUser?.signaturePath || adminUser?.signage || null;
+    signaturePath = adminUser?.signaturePath || null;
   }
 
   if (!signaturePath) {
     throw new HttpException(
-      currentUser.role === 'ADMIN'
-        ? 'Upload a signature on your profile before you validate.'
-        : 'No signature is available. Upload one on your profile, or ask an admin to upload a signature on theirs.',
+      'Upload the appointment letter signature on Profile. The signature used to endorse a posting letter is not printed on this letter.',
       HttpStatus.BAD_REQUEST,
     );
   }
@@ -794,7 +816,7 @@ async updateSubmissionStatus(
 
  let signatureBase64;
  try {
- signatureBase64 = imageToDataUrl(signaturePath);
+ signatureBase64 = await imageToDataUrl(signaturePath);
  } catch (error) {
  throw new HttpException(
  `Failed to load signature for user: ${error.message}`,
@@ -823,8 +845,18 @@ const referenceNumber = `BOD/${yearPart}/${nssPart}`;
 
  // Generate PDF and upload to local storage
  const pdfDoc = (pdfMake as any).createPdf(docDefinition, null, fonts);
- const pdfBuffer: Buffer = await new Promise((resolve) => {
- pdfDoc.getBuffer((buffer: Buffer) => resolve(buffer));
+ const pdfBuffer: Buffer = await new Promise((resolve, reject) => {
+  try {
+    pdfDoc.getBuffer((buffer: Buffer) => {
+      if (!buffer) {
+        reject(new Error('Could not build the appointment letter'));
+        return;
+      }
+      resolve(buffer);
+    });
+  } catch (error) {
+    reject(error);
+  }
  });
 
  const fileName = `job-confirmation-letters/${submissionId}-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`;
@@ -948,16 +980,27 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
   // Validate file type
   const allowedTypes = ['image/png', 'image/jpeg'];
   if (!file || !allowedTypes.includes(file.mimetype)) {
-    throw new HttpException('Only PNG or JPEG files are allowed', HttpStatus.BAD_REQUEST);
+    throw new HttpException('Only PNG or JPEG files are allowed. Upload a PNG or JPEG of the signature.', HttpStatus.BAD_REQUEST);
   }
 
-  // Save signature to local storage
-  const extension = file.mimetype === 'image/jpeg' ? 'jpg' : 'png';
-  const fileName = `signatures/user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
-  await this.localStorageService.uploadFile(
-    file.buffer,
-    fileName,
-  );
+  let png: Buffer;
+  try {
+    png = await sharp(file.buffer).rotate().png().toBuffer();
+  } catch {
+    throw new HttpException(
+      'This image could not be read. Upload a clear PNG or JPEG of the signature and try again.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+  if (!png.length) {
+    throw new HttpException(
+      'This image could not be read. Upload a clear PNG or JPEG of the signature and try again.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  const fileName = `signatures/user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+  await this.localStorageService.uploadFile(png, fileName);
   const signaturePath = fileName;
 
   return this.prisma.$transaction(async (prisma) => {
@@ -1001,7 +1044,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
       },
     });
 
-    return { message: 'Signature uploaded successfully', signaturePath };
+    return { message: 'Appointment letter signature saved', signaturePath };
   });
 }
 
@@ -1277,9 +1320,9 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     where: { id: requesterId, deletedAt: null },
     select: { id: true, role: true },
   });
-  if (!requester || !['ADMIN', 'STAFF'].includes(requester.role)) {
+  if (!requester || requester.role !== 'ADMIN') {
     throw new HttpException(
-      'Unauthorized: Only ADMIN or STAFF can assign personnel to departments',
+      'Unauthorized: Only an admin can assign personnel to a department',
       HttpStatus.FORBIDDEN,
     );
   }

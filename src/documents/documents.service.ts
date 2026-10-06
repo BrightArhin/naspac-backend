@@ -45,9 +45,9 @@ const placementNumber = (value: unknown, fallback: number) => {
 const mergeBox = (fallback: EndorseBox, input?: Partial<EndorseBox>): EndorseBox => ({
   x: Math.min(0.92, Math.max(0, placementNumber(input?.x, fallback.x))),
   y: Math.min(0.92, Math.max(0, placementNumber(input?.y, fallback.y))),
-  width: Math.min(0.6, Math.max(0.05, placementNumber(input?.width, fallback.width || 0.18))),
-  height: Math.min(0.4, Math.max(0.04, placementNumber(input?.height, fallback.height || 0.1))),
-  size: Math.min(72, Math.max(10, placementNumber(input?.size, fallback.size || 16))),
+  width: Math.min(0.85, Math.max(0.05, placementNumber(input?.width, fallback.width || 0.18))),
+  height: Math.min(0.6, Math.max(0.04, placementNumber(input?.height, fallback.height || 0.1))),
+  size: Math.min(96, Math.max(10, placementNumber(input?.size, fallback.size || 16))),
 });
 
 const mergePlacements = (input?: Partial<EndorsePlacements>): EndorsePlacements => ({

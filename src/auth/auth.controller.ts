@@ -96,15 +96,10 @@ export class AuthController {
   }
 
   @Get('onboarded')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('STAFF', 'ADMIN')
   async getOnboardedUsers(@Query('year') year?: string) {
-    try {
-      return await this.authService.getOnboardedUsers(year ? parseInt(year) : undefined);
-    } catch (error) {
-      throw new HttpException(
-        'Failed to fetch onboarded users',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
+    return this.authService.getOnboardedUsers(year ? parseInt(year) : undefined);
   }
 
   @Delete('onboarded/:id')

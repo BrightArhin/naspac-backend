@@ -12,6 +12,9 @@ import compression from 'compression';
 // import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
+  process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled rejection:', reason);
+  });
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;

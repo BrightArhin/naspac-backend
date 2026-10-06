@@ -107,8 +107,8 @@ export class AuthService {
 async loginStaffAdmin(staffId: string, password: string) {
   const user = await this.validateStaffAdmin(staffId, password);
   if (user.isTfaEnabled) {
-    if (!user.tfaSecret || (!user.phoneNumber && !user.email)) {
-      throw new HttpException('2FA is enabled but no phone number or email is set', HttpStatus.BAD_REQUEST);
+    if (!user.tfaSecret || !user.email) {
+      throw new HttpException('2FA is enabled but no email is set', HttpStatus.BAD_REQUEST);
     }
     await this.smsService.sendOtp(user.id);
     const tempPayload = {
@@ -123,7 +123,7 @@ async loginStaffAdmin(staffId: string, password: string) {
     };
     return {
       tempAccessToken: this.jwtService.sign(tempPayload, { expiresIn: '5m' }),
-      message: '2FA required. OTP sent to your phone and/or email.',
+      message: '2FA required. OTP sent to your email.',
       phoneNumber: user.phoneNumber,
       email: user.email,
     };
@@ -169,7 +169,7 @@ async loginStaffAdmin(staffId: string, password: string) {
     const tempPayload = { sub: user.id, userId: user.id, identifier: user.nssNumber, role: user.role, name: user.name, email: user.email || '', phoneNumber: user.phoneNumber, isTfaRequired: true, isTfaEnabled: user.isTfaEnabled };
     return {
       tempAccessToken: this.jwtService.sign(tempPayload, { expiresIn: '5m' }),
-      message: '2FA required. OTP sent to your phone and email.',
+      message: '2FA required. OTP sent to your email.',
       phoneNumber: user.phoneNumber,
     email: user.email,
     };
@@ -297,21 +297,17 @@ async loginStaffAdmin(staffId: string, password: string) {
   }
 
  async getOnboardedUsers(year?: number) {
-  const now = new Date();
-  const targetYear = year || (now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1);
-  const startOfYear = new Date(targetYear, 0, 1);
-  const endOfYear = new Date(targetYear + 1, 0, 1);
+  const targetYear = year || new Date().getFullYear();
 
   const users = await this.prisma.user.findMany({
     where: {
-      role: "PERSONNEL",
-      OnboardingToken: {
-        some: {},
-      },
-      createdAt: {
-        gte: startOfYear,
-        lt: endOfYear,
-      },
+      role: 'PERSONNEL',
+      deletedAt: null,
+      nssNumber: { endsWith: String(targetYear) },
+      OR: [
+        { OnboardingToken: { some: { deletedAt: null } } },
+        { submissions: { some: { deletedAt: null } } },
+      ],
     },
     select: {
       id: true,
@@ -320,29 +316,33 @@ async loginStaffAdmin(staffId: string, password: string) {
       email: true,
       phoneNumber: true,
       createdAt: true,
-      OnboardingToken: {
+      submissions: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
         select: {
-          token: true,
-          expiresAt: true,
-          used: true,
-          createdAt: true,
+          fullName: true,
+          email: true,
+          phoneNumber: true,
+          status: true,
         },
       },
     },
+    orderBy: { createdAt: 'desc' },
   });
 
-  return users.map(user => ({
-    id: user.id,
-    name: user.name || 'N/A',
-    nssNumber: user.nssNumber,
-    email: user.email,
-    phoneNumber: user.phoneNumber,
-    onboardingToken: user.OnboardingToken[0]?.token || 'N/A',
-    tokenCreatedAt: user.OnboardingToken[0]?.createdAt || null,
-    tokenExpiresAt: user.OnboardingToken[0]?.expiresAt || null,
-    tokenUsed: user.OnboardingToken[0]?.used || false,
-    userCreatedAt: user.createdAt,
-  }));
+  return users.map((user) => {
+    const submission = user.submissions[0];
+    return {
+      id: user.id,
+      name: user.name || submission?.fullName || '',
+      nssNumber: user.nssNumber,
+      email: user.email || submission?.email || '',
+      phoneNumber: user.phoneNumber || submission?.phoneNumber || '',
+      status: submission?.status || 'AWAITING_FORM',
+      userCreatedAt: user.createdAt,
+    };
+  });
 }
 
   async deleteOnboardedUser(userId: number, initiatorId: number) {
@@ -559,7 +559,7 @@ async loginStaffAdmin(staffId: string, password: string) {
     throw new HttpException('User not found', HttpStatus.BAD_REQUEST);
   }
   await this.smsService.sendOtp(userId);
-  return { message: 'OTP resent to your phone' };
+  return { message: 'OTP resent to your email' };
   }
 
   // Debug method to check user 2FA status
