@@ -35,6 +35,7 @@ model User {
   documents           Document[]    @relation("SignedDocuments")
   passwordResetTokens PasswordResetToken[]
   OnboardingToken     OnboardingToken[]
+  refreshTokens       RefreshToken[]
   department          Department?   @relation("UserDepartment", fields: [departmentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   unit                Unit?         @relation("UserUnit", fields: [unitId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   supervisor          User?         @relation("SupervisorPersonnel", fields: [supervisorId], references: [id], onDelete: SetNull, onUpdate: Cascade)
@@ -146,6 +147,18 @@ model PasswordResetToken {
   createdAt           DateTime      @default(now())
   deletedAt           DateTime?
   user                User          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+}
+
+model RefreshToken {
+  id                  Int           @id @default(autoincrement())
+  tokenHash           String        @unique
+  userId              Int
+  expiresAt           DateTime
+  createdAt           DateTime      @default(now())
+  revokedAt           DateTime?
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
 }
 
 model OnboardingToken {

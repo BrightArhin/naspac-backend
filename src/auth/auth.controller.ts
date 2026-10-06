@@ -1,4 +1,17 @@
-import { Controller, Post, Body, UseGuards, Request, Get, Req, HttpException, HttpStatus, Param, Delete, Query } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Request,
+  Get,
+  Req,
+  HttpException,
+  HttpStatus,
+  Param,
+  Delete,
+  Query,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import { InitOnboardingDto } from '../users/dto/init-onboarding.dto';
@@ -13,6 +26,8 @@ import { InitUserDto } from 'src/users/dto/create-user.dto';
 import { SmsService } from './sms.service';
 import { TwoFactorAuthGuard } from 'src/common/guards/two-factor-auth.guard';
 import { TwoFaDto } from './dto/two-fa.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { LogoutDto } from './dto/logout.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -31,11 +46,14 @@ export class AuthController {
     return this.authService.loginStaffAdmin(body.staffId, body.password);
   }
 
-   @Post('verifyTfa')
+  @Post('verifyTfa')
   @UseGuards(JwtAuthGuard)
   async verifyTfa(@Req() req: any, @Body() body: TwoFaDto) {
     if (!req.user.isTfaRequired) {
-      throw new HttpException('2FA not required for this token', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        '2FA not required for this token',
+        HttpStatus.BAD_REQUEST,
+      );
     }
     return this.authService.verifyTfa(req.user.id, body.tfaToken);
   }
@@ -44,20 +62,35 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async resendOtp(@Req() req: any) {
     if (!req.user.isTfaRequired) {
-      throw new HttpException('No pending 2FA verification', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'No pending 2FA verification',
+        HttpStatus.BAD_REQUEST,
+      );
     }
     return this.authService.resendOtp(req.user.id);
   }
 
-    @Get('validate')
+  @Get('validate')
   @UseGuards(TwoFactorAuthGuard)
   async validateToken(@Req() req: any) {
-    return { success: true, userId: req.user.id, role: req.user.role, email: req.user.email, name: req.user.name};
+    return {
+      success: true,
+      userId: req.user.id,
+      role: req.user.role,
+      email: req.user.email,
+      name: req.user.name,
+    };
+  }
+
+  @Post('refresh')
+  async refresh(@Body() body: RefreshTokenDto) {
+    return this.authService.refreshSession(body.refreshToken);
   }
 
   @Post('logout')
   @UseGuards(JwtAuthGuard)
-  async logout() {
+  async logout(@Body() body: LogoutDto) {
+    await this.authService.logout(body.refreshToken);
     return { success: true, message: 'Logged out successfully' };
   }
 
@@ -65,17 +98,30 @@ export class AuthController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('STAFF', 'ADMIN')
   async initOnboarding(@Body() body: InitOnboardingDto, @Request() req) {
-    return this.authService.initOnboarding(body.nssNumber, body.email, req.user, body.phoneNumber);
+    return this.authService.initOnboarding(
+      body.nssNumber,
+      body.email,
+      req.user,
+      body.phoneNumber,
+    );
   }
-  
-    @Post('init-user')
+
+  @Post('init-user')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
   async initUser(@Body() body: InitUserDto, @Request() req) {
-    return this.authService.initUser(body.staffId, body.email, body.name, body.role, req.user, body.phoneNumber, body.enable2FA);
+    return this.authService.initUser(
+      body.staffId,
+      body.email,
+      body.name,
+      body.role,
+      req.user,
+      body.phoneNumber,
+      body.enable2FA,
+    );
   }
 
-   @Post('request-forgot-password')
+  @Post('request-forgot-password')
   async requestForgotPassword(@Body() body: RequestForgotPasswordDto) {
     return this.authService.requestForgotPassword(body.email);
   }
@@ -99,7 +145,9 @@ export class AuthController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('STAFF', 'ADMIN')
   async getOnboardedUsers(@Query('year') year?: string) {
-    return this.authService.getOnboardedUsers(year ? parseInt(year) : undefined);
+    return this.authService.getOnboardedUsers(
+      year ? parseInt(year) : undefined,
+    );
   }
 
   @Delete('onboarded/:id')
@@ -108,7 +156,10 @@ export class AuthController {
     try {
       const userRole = req.user.role;
       if (!['STAFF', 'ADMIN'].includes(userRole)) {
-        throw new HttpException('Unauthorized: Only staff or admins can delete users', HttpStatus.FORBIDDEN);
+        throw new HttpException(
+          'Unauthorized: Only staff or admins can delete users',
+          HttpStatus.FORBIDDEN,
+        );
       }
       await this.authService.deleteOnboardedUser(parseInt(id), req.user.id);
       return { message: 'User deleted successfully' };
@@ -126,10 +177,19 @@ export class AuthController {
     try {
       const userRole = req.user.role;
       if (!['STAFF', 'ADMIN'].includes(userRole)) {
-        throw new HttpException('Unauthorized: Only staff or admins can renew tokens', HttpStatus.FORBIDDEN);
+        throw new HttpException(
+          'Unauthorized: Only staff or admins can renew tokens',
+          HttpStatus.FORBIDDEN,
+        );
       }
-      const result = await this.authService.renewOnboardingToken(parseInt(id), req.user.id);
-      return { message: 'Onboarding token renewed and email sent', email: result.email };
+      const result = await this.authService.renewOnboardingToken(
+        parseInt(id),
+        req.user.id,
+      );
+      return {
+        message: 'Onboarding token renewed and email sent',
+        email: result.email,
+      };
     } catch (error) {
       throw new HttpException(
         error.message || 'Failed to renew onboarding token',

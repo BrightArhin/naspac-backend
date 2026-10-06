@@ -8,6 +8,8 @@ import { PrismaService } from 'prisma/prisma.service';
 import { SmsService } from './sms.service';
 import { authenticator } from 'otplib';
 
+const REFRESH_TOKEN_TTL_DAYS = 30;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -18,18 +20,88 @@ export class AuthService {
     private smsService: SmsService,
   ) {}
 
+  private buildAccessPayload(user: {
+    id: number;
+    role: string;
+    name?: string | null;
+    email?: string | null;
+    phoneNumber?: string | null;
+    staffId?: string | null;
+    nssNumber?: string | null;
+    isTfaEnabled?: boolean;
+  }) {
+    const identifier =
+      user.role === 'PERSONNEL' ? user.nssNumber : user.staffId;
+    return {
+      sub: user.id,
+      identifier,
+      role: user.role,
+      name: user.name,
+      email: user.email || '',
+      phoneNumber: user.phoneNumber || '',
+      isTfaRequired: false,
+      isTfaEnabled: user.isTfaEnabled ?? false,
+    };
+  }
+
+  private hashRefreshToken(refreshToken: string) {
+    return crypto.createHash('sha256').update(refreshToken).digest('hex');
+  }
+
+  private async createSessionTokens(user: {
+    id: number;
+    role: string;
+    name?: string | null;
+    email?: string | null;
+    phoneNumber?: string | null;
+    staffId?: string | null;
+    nssNumber?: string | null;
+    isTfaEnabled?: boolean;
+  }) {
+    const accessToken = this.jwtService.sign(this.buildAccessPayload(user));
+    const refreshToken = crypto.randomBytes(48).toString('hex');
+    const tokenHash = this.hashRefreshToken(refreshToken);
+    const expiresAt = new Date(
+      Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    await this.prisma.refreshToken.create({
+      data: {
+        tokenHash,
+        userId: user.id,
+        expiresAt,
+      },
+    });
+
+    return {
+      accessToken,
+      refreshToken,
+      refreshTokenExpiresAt: expiresAt.toISOString(),
+    };
+  }
+
   // Validate STAFF or ADMIN user
   async validateStaffAdmin(staffId: string, password: string): Promise<any> {
     const user = await this.usersService.findByStaffId(staffId);
 
     if (!user) {
-      throw new HttpException('Invalid staff ID or password', HttpStatus.UNAUTHORIZED);
+      throw new HttpException(
+        'Invalid staff ID or password',
+        HttpStatus.UNAUTHORIZED,
+      );
     }
-      if (user.deletedAt !== null) {
-    throw new HttpException('Account is disabled. Please contact support.', HttpStatus.UNAUTHORIZED);
-  }
+    if (user.deletedAt !== null) {
+      throw new HttpException(
+        'Account is disabled. Please contact support.',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
 
-    if (user.role !== 'STAFF' && user.role !== 'ADMIN' && user.role !== 'SUPERVISOR') {
+    if (
+      user.role !== 'STAFF' &&
+      user.role !== 'ADMIN' &&
+      user.role !== 'SUPERVISOR'
+    ) {
       throw new HttpException(
         'Access denied. Only Staff or Admin roles are allowed.',
         HttpStatus.FORBIDDEN,
@@ -37,62 +109,82 @@ export class AuthService {
     }
 
     if (!user.password) {
-      throw new HttpException('Password not set. Please reset your password.', HttpStatus.UNAUTHORIZED);
+      throw new HttpException(
+        'Password not set. Please reset your password.',
+        HttpStatus.UNAUTHORIZED,
+      );
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      throw new HttpException('Invalid staff ID or password', HttpStatus.UNAUTHORIZED);
+      throw new HttpException(
+        'Invalid staff ID or password',
+        HttpStatus.UNAUTHORIZED,
+      );
     }
 
-    return { 
-      id: user.id, 
-      staffId: user.staffId, 
-      role: user.role, 
-      email: user.email, 
-      name: user.name, 
+    return {
+      id: user.id,
+      staffId: user.staffId,
+      role: user.role,
+      email: user.email,
+      name: user.name,
       phoneNumber: user.phoneNumber,
       isTfaEnabled: user.isTfaEnabled,
-      tfaSecret: user.tfaSecret
+      tfaSecret: user.tfaSecret,
     };
   }
 
- async validatePersonnel(nssNumber: string, password: string): Promise<any> {
-  let user = await this.usersService.findByNssNumber(nssNumber);
+  async validatePersonnel(nssNumber: string, password: string): Promise<any> {
+    let user = await this.usersService.findByNssNumber(nssNumber);
 
-  // try with current year appended
-  if (!user) {
-    const currentYear = new Date().getFullYear();
-    const nssNumberWithYear = `${nssNumber}${currentYear}`;
-    user = await this.usersService.findByNssNumber(nssNumberWithYear);
-  }
+    // try with current year appended
+    if (!user) {
+      const currentYear = new Date().getFullYear();
+      const nssNumberWithYear = `${nssNumber}${currentYear}`;
+      user = await this.usersService.findByNssNumber(nssNumberWithYear);
+    }
 
-  if (!user) {
-    throw new HttpException('Invalid NSS number or password', HttpStatus.UNAUTHORIZED);
-  }
+    if (!user) {
+      throw new HttpException(
+        'Invalid NSS number or password',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
 
-  if (user.role !== 'PERSONNEL') {
-    throw new HttpException(
-      'Access denied. Only Personnel role is allowed.',
-      HttpStatus.FORBIDDEN,
-    );
-  }
-  if (user.deletedAt !== null) {
-    throw new HttpException('Account is disabled. Please contact support.', HttpStatus.UNAUTHORIZED);
-  }
-  if (!user.password) {
-    throw new HttpException('Password not set. Please reset your password.', HttpStatus.UNAUTHORIZED);
-  }
+    if (user.role !== 'PERSONNEL') {
+      throw new HttpException(
+        'Access denied. Only Personnel role is allowed.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (user.deletedAt !== null) {
+      throw new HttpException(
+        'Account is disabled. Please contact support.',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    if (!user.password) {
+      throw new HttpException(
+        'Password not set. Please reset your password.',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
 
-  const isPasswordValid = await bcrypt.compare(password, user.password);
-  if (!isPasswordValid) {
-    throw new HttpException('Invalid NSS number or password', HttpStatus.UNAUTHORIZED);
-  }
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new HttpException(
+        'Invalid NSS number or password',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
 
-  const submission = await this.prisma.submission.findUnique({
-      where: { userId_nssNumber: { userId: user.id, nssNumber: user.nssNumber } },
+    const submission = await this.prisma.submission.findUnique({
+      where: {
+        userId_nssNumber: { userId: user.id, nssNumber: user.nssNumber },
+      },
     });
-        return {
+    return {
       id: user.id,
       nssNumber: user.nssNumber,
       role: user.role,
@@ -100,64 +192,66 @@ export class AuthService {
       name: user.name,
       phoneNumber: user.phoneNumber || submission?.phoneNumber,
       isTfaEnabled: user.isTfaEnabled || true, // Personnel always have 2FA enabled
-      tfaSecret: user.tfaSecret
-    };
-}
-
-async loginStaffAdmin(staffId: string, password: string) {
-  const user = await this.validateStaffAdmin(staffId, password);
-  if (user.isTfaEnabled) {
-    if (!user.tfaSecret || !user.email) {
-      throw new HttpException('2FA is enabled but no email is set', HttpStatus.BAD_REQUEST);
-    }
-    await this.smsService.sendOtp(user.id);
-    const tempPayload = {
-      sub: user.id,
-      identifier: user.staffId,
-      role: user.role,
-      name: user.name,
-      email: user.email,
-      phoneNumber: user.phoneNumber,
-      isTfaRequired: true,
-      isTfaEnabled: user.isTfaEnabled, // Include in payload
-    };
-    return {
-      tempAccessToken: this.jwtService.sign(tempPayload, { expiresIn: '5m' }),
-      message: '2FA required. OTP sent to your email.',
-      phoneNumber: user.phoneNumber,
-      email: user.email,
-    };
-  } else {
-    const payload = {
-      sub: user.id,
-      identifier: user.staffId,
-      role: user.role,
-      name: user.name,
-      email: user.email,
-      phoneNumber: user.phoneNumber,
-      isTfaRequired: false,
-      isTfaEnabled: user.isTfaEnabled, // Include in payload
-    };
-    return {
-      accessToken: this.jwtService.sign(payload),
-      role: user.role,
-      message: 'Login successful',
+      tfaSecret: user.tfaSecret,
     };
   }
-}
 
-// async loginStaffAdmin(staffId: string, password: string) {
-//      const user = await this.validateStaffAdmin(staffId, password);
-//     if (!user.phoneNumber) {
-//       throw new HttpException('Phone number not set. Please update your profile.', HttpStatus.BAD_REQUEST);
-//     }
-//     // await this.smsService.sendOtp(user.id);
-//     const payload = { sub: user.id, identifier: user.staffId, role: user.role, name: user.name, email: user.email, isTfaRequired: true };
-//      return {
-//     accessToken: this.jwtService.sign(payload),
-//     role: user.role,
-//   };
-//   }
+  async loginStaffAdmin(staffId: string, password: string) {
+    const user = await this.validateStaffAdmin(staffId, password);
+    if (user.isTfaEnabled) {
+      if (!user.tfaSecret || !user.email) {
+        throw new HttpException(
+          '2FA is enabled but no email is set',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      await this.smsService.sendOtp(user.id);
+      const tempPayload = {
+        sub: user.id,
+        identifier: user.staffId,
+        role: user.role,
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        isTfaRequired: true,
+        isTfaEnabled: user.isTfaEnabled, // Include in payload
+      };
+      return {
+        tempAccessToken: this.jwtService.sign(tempPayload, { expiresIn: '5m' }),
+        message: '2FA required. OTP sent to your email.',
+        phoneNumber: user.phoneNumber,
+        email: user.email,
+      };
+    } else {
+      const session = await this.createSessionTokens({
+        id: user.id,
+        staffId: user.staffId,
+        role: user.role,
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        isTfaEnabled: user.isTfaEnabled,
+      });
+      return {
+        ...session,
+        role: user.role,
+        message: 'Login successful',
+      };
+    }
+  }
+
+  // async loginStaffAdmin(staffId: string, password: string) {
+  //      const user = await this.validateStaffAdmin(staffId, password);
+  //     if (!user.phoneNumber) {
+  //       throw new HttpException('Phone number not set. Please update your profile.', HttpStatus.BAD_REQUEST);
+  //     }
+  //     // await this.smsService.sendOtp(user.id);
+  //     const payload = { sub: user.id, identifier: user.staffId, role: user.role, name: user.name, email: user.email, isTfaRequired: true };
+  //      return {
+  //     accessToken: this.jwtService.sign(payload),
+  //     role: user.role,
+  //   };
+  //   }
 
   async loginPersonnel(nssNumber: string, password: string) {
     const user = await this.validatePersonnel(nssNumber, password);
@@ -166,56 +260,155 @@ async loginStaffAdmin(staffId: string, password: string) {
     // }
     // Personnel always require 2FA
     await this.smsService.sendOtp(user.id);
-    const tempPayload = { sub: user.id, userId: user.id, identifier: user.nssNumber, role: user.role, name: user.name, email: user.email || '', phoneNumber: user.phoneNumber, isTfaRequired: true, isTfaEnabled: user.isTfaEnabled };
+    const tempPayload = {
+      sub: user.id,
+      userId: user.id,
+      identifier: user.nssNumber,
+      role: user.role,
+      name: user.name,
+      email: user.email || '',
+      phoneNumber: user.phoneNumber,
+      isTfaRequired: true,
+      isTfaEnabled: user.isTfaEnabled,
+    };
     return {
       tempAccessToken: this.jwtService.sign(tempPayload, { expiresIn: '5m' }),
       message: '2FA required. OTP sent to your email.',
       phoneNumber: user.phoneNumber,
-    email: user.email,
+      email: user.email,
     };
   }
 
- async verifyTfa(userId: number, token: string) {
-  const isValid = await this.smsService.verifyOtp(userId, token);
-  if (!isValid) {
-    throw new HttpException('Invalid OTP', HttpStatus.UNAUTHORIZED);
+  async verifyTfa(userId: number, token: string) {
+    const isValid = await this.smsService.verifyOtp(userId, token);
+    if (!isValid) {
+      throw new HttpException('Invalid OTP', HttpStatus.UNAUTHORIZED);
+    }
+    const user = await this.usersService.findById(userId);
+    if (
+      !user.staffId &&
+      (user.role === 'STAFF' ||
+        user.role === 'ADMIN' ||
+        user.role === 'SUPERVISOR')
+    ) {
+      throw new HttpException(
+        'Staff ID not found',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+    const identifier =
+      user.role === 'PERSONNEL' ? user.nssNumber : user.staffId;
+    if (!identifier) {
+      throw new HttpException(
+        'User identifier not found',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+    const session = await this.createSessionTokens({
+      id: user.id,
+      staffId: user.staffId,
+      nssNumber: user.nssNumber,
+      role: user.role,
+      name: user.name,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      isTfaEnabled: user.isTfaEnabled,
+    });
+    return {
+      ...session,
+      role: user.role,
+    };
   }
-  const user = await this.usersService.findById(userId);
-  if (!user.staffId && (user.role === 'STAFF' || user.role === 'ADMIN' || user.role === 'SUPERVISOR')) {
-    throw new HttpException('Staff ID not found', HttpStatus.INTERNAL_SERVER_ERROR);
-  }
-  const identifier = user.role === 'PERSONNEL' ? user.nssNumber : user.staffId;
-  if (!identifier) {
-    throw new HttpException('User identifier not found', HttpStatus.INTERNAL_SERVER_ERROR);
-  }
-  const payload = {
-    sub: user.id,
-    identifier,
-    role: user.role,
-    name: user.name,
-    email: user.email || '',
-    phoneNumber: user.phoneNumber || '',
-    isTfaRequired: false,
-    isTfaEnabled: user.isTfaEnabled, // Add to payload
-  };
-  return {
-    accessToken: this.jwtService.sign(payload),
-    role: user.role,
-  };
-}
 
   async validateToken(user: any) {
-    return { success: true, userId: user.id, role: user.role, email: user.email, name: user.name };
+    return {
+      success: true,
+      userId: user.id,
+      role: user.role,
+      email: user.email,
+      name: user.name,
+    };
   }
 
- async initOnboarding(nssNumber: string, email: string, initiatedBy: { id: number; role: string }, phoneNumber: string) {
-    if (!['STAFF', 'ADMIN'].includes(initiatedBy.role)) {
-      throw new HttpException('Unauthorized: Only staff or admins can initiate onboarding', HttpStatus.FORBIDDEN);
+  async refreshSession(refreshToken: string) {
+    const tokenHash = this.hashRefreshToken(refreshToken);
+    const storedToken = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (
+      !storedToken ||
+      storedToken.revokedAt ||
+      storedToken.expiresAt < new Date()
+    ) {
+      throw new HttpException(
+        'Invalid or expired refresh token',
+        HttpStatus.UNAUTHORIZED,
+      );
     }
 
-     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new HttpException('Invalid email address', HttpStatus.BAD_REQUEST);
+    if (storedToken.user.deletedAt) {
+      throw new HttpException(
+        'Account is disabled. Please contact support.',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    await this.prisma.refreshToken.update({
+      where: { id: storedToken.id },
+      data: { revokedAt: new Date() },
+    });
+
+    const session = await this.createSessionTokens({
+      id: storedToken.user.id,
+      staffId: storedToken.user.staffId,
+      nssNumber: storedToken.user.nssNumber,
+      role: storedToken.user.role,
+      name: storedToken.user.name,
+      email: storedToken.user.email,
+      phoneNumber: storedToken.user.phoneNumber,
+      isTfaEnabled: storedToken.user.isTfaEnabled,
+    });
+
+    return {
+      ...session,
+      role: storedToken.user.role,
+    };
   }
+
+  async logout(refreshToken?: string) {
+    if (!refreshToken) {
+      return;
+    }
+
+    await this.prisma.refreshToken.updateMany({
+      where: {
+        tokenHash: this.hashRefreshToken(refreshToken),
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+  }
+
+  async initOnboarding(
+    nssNumber: string,
+    email: string,
+    initiatedBy: { id: number; role: string },
+    phoneNumber: string,
+  ) {
+    if (!['STAFF', 'ADMIN'].includes(initiatedBy.role)) {
+      throw new HttpException(
+        'Unauthorized: Only staff or admins can initiate onboarding',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new HttpException('Invalid email address', HttpStatus.BAD_REQUEST);
+    }
     const currentYear = new Date().getFullYear();
     const nssNumberWithYear = `${nssNumber}${currentYear}`;
     const normalizedEmail = email.trim();
@@ -246,10 +439,17 @@ async loginStaffAdmin(staffId: string, password: string) {
     }
 
     if (existingByNss && existingByNss.role !== 'PERSONNEL') {
-      throw new HttpException('NSS number already registered', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'NSS number already registered',
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
-    if (existingByNss && existingByEmail && existingByNss.id !== existingByEmail.id) {
+    if (
+      existingByNss &&
+      existingByEmail &&
+      existingByNss.id !== existingByEmail.id
+    ) {
       throw new HttpException(
         'This NSS number and email belong to different accounts.',
         HttpStatus.BAD_REQUEST,
@@ -260,7 +460,8 @@ async loginStaffAdmin(staffId: string, password: string) {
     if (existingPersonnel) {
       await this.renewOnboardingToken(existingPersonnel.id, initiatedBy.id);
       return {
-        message: 'This personnel already has an account. A new onboarding link was sent to their email.',
+        message:
+          'This personnel already has an account. A new onboarding link was sent to their email.',
         email: existingPersonnel.email,
       };
     }
@@ -285,7 +486,11 @@ async loginStaffAdmin(staffId: string, password: string) {
     });
 
     try {
-      await this.notificationsService.sendOnboardingEmail(email, nssNumberWithYear, token);
+      await this.notificationsService.sendOnboardingEmail(
+        email,
+        nssNumberWithYear,
+        token,
+      );
     } catch {
       throw new HttpException(
         'The personnel account was created, but the onboarding email could not be sent. The email queue is not reachable.',
@@ -296,54 +501,54 @@ async loginStaffAdmin(staffId: string, password: string) {
     return { message: 'Onboarding link sent to email', email };
   }
 
- async getOnboardedUsers(year?: number) {
-  const targetYear = year || new Date().getFullYear();
+  async getOnboardedUsers(year?: number) {
+    const targetYear = year || new Date().getFullYear();
 
-  const users = await this.prisma.user.findMany({
-    where: {
-      role: 'PERSONNEL',
-      deletedAt: null,
-      nssNumber: { endsWith: String(targetYear) },
-      OR: [
-        { OnboardingToken: { some: { deletedAt: null } } },
-        { submissions: { some: { deletedAt: null } } },
-      ],
-    },
-    select: {
-      id: true,
-      name: true,
-      nssNumber: true,
-      email: true,
-      phoneNumber: true,
-      createdAt: true,
-      submissions: {
-        where: { deletedAt: null },
-        orderBy: { createdAt: 'desc' },
-        take: 1,
-        select: {
-          fullName: true,
-          email: true,
-          phoneNumber: true,
-          status: true,
+    const users = await this.prisma.user.findMany({
+      where: {
+        role: 'PERSONNEL',
+        deletedAt: null,
+        nssNumber: { endsWith: String(targetYear) },
+        OR: [
+          { OnboardingToken: { some: { deletedAt: null } } },
+          { submissions: { some: { deletedAt: null } } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        nssNumber: true,
+        email: true,
+        phoneNumber: true,
+        createdAt: true,
+        submissions: {
+          where: { deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            fullName: true,
+            email: true,
+            phoneNumber: true,
+            status: true,
+          },
         },
       },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
+      orderBy: { createdAt: 'desc' },
+    });
 
-  return users.map((user) => {
-    const submission = user.submissions[0];
-    return {
-      id: user.id,
-      name: user.name || submission?.fullName || '',
-      nssNumber: user.nssNumber,
-      email: user.email || submission?.email || '',
-      phoneNumber: user.phoneNumber || submission?.phoneNumber || '',
-      status: submission?.status || 'AWAITING_FORM',
-      userCreatedAt: user.createdAt,
-    };
-  });
-}
+    return users.map((user) => {
+      const submission = user.submissions[0];
+      return {
+        id: user.id,
+        name: user.name || submission?.fullName || '',
+        nssNumber: user.nssNumber,
+        email: user.email || submission?.email || '',
+        phoneNumber: user.phoneNumber || submission?.phoneNumber || '',
+        status: submission?.status || 'AWAITING_FORM',
+        userCreatedAt: user.createdAt,
+      };
+    });
+  }
 
   async deleteOnboardedUser(userId: number, initiatorId: number) {
     const user = await this.prisma.user.findUnique({
@@ -352,13 +557,16 @@ async loginStaffAdmin(staffId: string, password: string) {
     });
 
     if (!user || !user.OnboardingToken.length) {
-      throw new HttpException('User not found or not onboarded', HttpStatus.NOT_FOUND);
+      throw new HttpException(
+        'User not found or not onboarded',
+        HttpStatus.NOT_FOUND,
+      );
     }
 
     await this.prisma.$transaction([
       this.prisma.user.delete({
-          where: { id: userId },
-        }),
+        where: { id: userId },
+      }),
       // Log the action in AuditLog
       this.prisma.auditLog.create({
         data: {
@@ -377,11 +585,17 @@ async loginStaffAdmin(staffId: string, password: string) {
     });
 
     if (!user || !user.nssNumber) {
-      throw new HttpException('User not found or not onboarded', HttpStatus.NOT_FOUND);
+      throw new HttpException(
+        'User not found or not onboarded',
+        HttpStatus.NOT_FOUND,
+      );
     }
 
     if (user.deletedAt) {
-      throw new HttpException('User is deleted and cannot have their token renewed', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'User is deleted and cannot have their token renewed',
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     const token = crypto.randomBytes(32).toString('hex');
@@ -412,12 +626,21 @@ async loginStaffAdmin(staffId: string, password: string) {
     ]);
 
     // Send onboarding email
-    await this.notificationsService.sendOnboardingEmail(user.email, user.nssNumber, token);
+    await this.notificationsService.sendOnboardingEmail(
+      user.email,
+      user.nssNumber,
+      token,
+    );
 
     return { email: user.email };
   }
 
-  async onboardingResetPassword(nssNumber: string, token: string, password: string, confirmPassword: string) {
+  async onboardingResetPassword(
+    nssNumber: string,
+    token: string,
+    password: string,
+    confirmPassword: string,
+  ) {
     if (password !== confirmPassword) {
       throw new HttpException('Passwords do not match', HttpStatus.BAD_REQUEST);
     }
@@ -433,7 +656,10 @@ async loginStaffAdmin(staffId: string, password: string) {
       onboardingToken.used ||
       onboardingToken.expiresAt < new Date()
     ) {
-      throw new HttpException( 'This password reset link is invalid or has expired. Please try logging in with your new password.', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'This password reset link is invalid or has expired. Please try logging in with your new password.',
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     // if (onboardingToken.user.password) {
@@ -456,7 +682,10 @@ async loginStaffAdmin(staffId: string, password: string) {
       return { message: 'If an account exists, a reset link will be sent' };
     }
     if (user.deletedAt !== null) {
-      throw new HttpException('Account is disabled. Please contact support.', HttpStatus.UNAUTHORIZED);
+      throw new HttpException(
+        'Account is disabled. Please contact support.',
+        HttpStatus.UNAUTHORIZED,
+      );
     }
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour expiry
@@ -481,7 +710,10 @@ async loginStaffAdmin(staffId: string, password: string) {
     });
 
     if (!resetToken || resetToken.expiresAt < new Date()) {
-      throw new HttpException('This password reset link is invalid or has expired. Please try logging in with your new password.', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'This password reset link is invalid or has expired. Please try logging in with your new password.',
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     await this.usersService.updateUser(resetToken.userId, { password });
@@ -491,75 +723,100 @@ async loginStaffAdmin(staffId: string, password: string) {
     return { message: 'Password reset successfully' };
   }
 
-  async initUser(staffId: string, email: string, name: string, role: 'STAFF' | 'ADMIN' | 'SUPERVISOR', initiatedBy: { id: number; role: string }, phoneNumber?: string, enable2FA?: boolean) {
+  async initUser(
+    staffId: string,
+    email: string,
+    name: string,
+    role: 'STAFF' | 'ADMIN' | 'SUPERVISOR',
+    initiatedBy: { id: number; role: string },
+    phoneNumber?: string,
+    enable2FA?: boolean,
+  ) {
+    if (initiatedBy.role !== 'ADMIN') {
+      throw new HttpException(
+        'Unauthorized: Only admins can initiate user creation',
+        HttpStatus.FORBIDDEN,
+      );
+    }
 
-  if (initiatedBy.role !== 'ADMIN') {
-    throw new HttpException('Unauthorized: Only admins can initiate user creation', HttpStatus.FORBIDDEN);
-  }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new HttpException('Invalid email address', HttpStatus.BAD_REQUEST);
+    }
+    if (enable2FA && (!phoneNumber || !/^\+\d{10,15}$/.test(phoneNumber))) {
+      throw new HttpException(
+        'Valid phone number with country code required when enabling 2FA (e.g., +233557484584)',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new HttpException('Invalid email address', HttpStatus.BAD_REQUEST);
-  }
-  if (enable2FA && (!phoneNumber || !/^\+\d{10,15}$/.test(phoneNumber))) {
-    throw new HttpException('Valid phone number with country code required when enabling 2FA (e.g., +233557484584)', HttpStatus.BAD_REQUEST);
-  }
+    const [existingUser, existingEmail, existingPhone] = await Promise.all([
+      this.usersService.findByNssNumberOrStaffId(staffId),
+      this.usersService.findByEmail(email),
+      phoneNumber ? this.usersService.findByPhoneNumber(phoneNumber) : null,
+    ]);
+    if (existingUser) {
+      throw new HttpException(
+        'Staff ID already registered',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (existingEmail) {
+      throw new HttpException(
+        'Email already registered',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (existingPhone) {
+      throw new HttpException(
+        'Phone number already registered',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
-  const [existingUser, existingEmail, existingPhone] = await Promise.all([
-    this.usersService.findByNssNumberOrStaffId(staffId),
-    this.usersService.findByEmail(email),
-    phoneNumber ? this.usersService.findByPhoneNumber(phoneNumber) : null,
-  ]);
-  if (existingUser) {
-    throw new HttpException('Staff ID already registered', HttpStatus.BAD_REQUEST);
-  }
-  if (existingEmail) {
-    throw new HttpException('Email already registered', HttpStatus.BAD_REQUEST);
-  }
-  if (existingPhone) {
-    throw new HttpException('Phone number already registered', HttpStatus.BAD_REQUEST);
-  }
+    if (!['STAFF', 'ADMIN', 'SUPERVISOR'].includes(role)) {
+      throw new HttpException(
+        'Invalid role: Must be STAFF, ADMIN, or SUPERVISOR',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
-  if (!['STAFF', 'ADMIN', 'SUPERVISOR'].includes(role)) {
-    throw new HttpException('Invalid role: Must be STAFF, ADMIN, or SUPERVISOR', HttpStatus.BAD_REQUEST);
-  }
+    const user = await this.usersService.createUser({
+      staffId,
+      email,
+      name,
+      role,
+      phoneNumber,
+      enable2FA,
+    });
 
-  const user = await this.usersService.createUser({
-   staffId,
-    email,
-    name,
-    role,
-    phoneNumber,
-    enable2FA
-  });
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000);
 
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000);
+    await this.prisma.onboardingToken.create({
+      data: {
+        token,
+        nssNumber: staffId,
+        userId: user.id,
+        expiresAt,
+      },
+    });
 
-  await this.prisma.onboardingToken.create({
-    data: {
-      token,
-      nssNumber: staffId,
-      userId: user.id,
-      expiresAt,
-    },
-  });
+    await this.notificationsService.sendOnboardingEmail(email, staffId, token);
 
-  await this.notificationsService.sendOnboardingEmail(email, staffId, token);
-
-  return { 
-    message: 'Onboarding link sent to email', 
-    email,
-    has2FA: user.isTfaEnabled,
-  };
+    return {
+      message: 'Onboarding link sent to email',
+      email,
+      has2FA: user.isTfaEnabled,
+    };
   }
 
   async resendOtp(userId: number) {
-  const user = await this.usersService.findById(userId);
-  if (!user) {
-    throw new HttpException('User not found', HttpStatus.BAD_REQUEST);
-  }
-  await this.smsService.sendOtp(userId);
-  return { message: 'OTP resent to your email' };
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new HttpException('User not found', HttpStatus.BAD_REQUEST);
+    }
+    await this.smsService.sendOtp(userId);
+    return { message: 'OTP resent to your email' };
   }
 
   // Debug method to check user 2FA status
@@ -568,7 +825,7 @@ async loginStaffAdmin(staffId: string, password: string) {
     if (!user) {
       throw new HttpException('User not found', HttpStatus.NOT_FOUND);
     }
-    
+
     return {
       id: user.id,
       staffId: user.staffId,
@@ -576,7 +833,7 @@ async loginStaffAdmin(staffId: string, password: string) {
       phoneNumber: user.phoneNumber,
       isTfaEnabled: user.isTfaEnabled,
       hasTfaSecret: !!user.tfaSecret,
-      role: user.role
+      role: user.role,
     };
   }
 }
