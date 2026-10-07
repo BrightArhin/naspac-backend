@@ -552,6 +552,124 @@ export class AuthService {
     });
   }
 
+  async updateOnboardedPersonnel(
+    userId: number,
+    initiatorId: number,
+    dto: { nssNumber: string; email: string; phoneNumber: string },
+  ) {
+    const nssNumber = dto.nssNumber?.trim();
+    const email = dto.email?.trim();
+    const phoneNumber = dto.phoneNumber?.trim();
+
+    if (!nssNumber) {
+      throw new HttpException('NSS number is required', HttpStatus.BAD_REQUEST);
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new HttpException('Enter a valid email address', HttpStatus.BAD_REQUEST);
+    }
+    if (!phoneNumber || !/^\+?\d{10,15}$/.test(phoneNumber)) {
+      throw new HttpException(
+        'Enter a valid mobile number (10-15 digits, optional +)',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, role: 'PERSONNEL', deletedAt: null },
+      select: { id: true, nssNumber: true, name: true },
+    });
+    if (!user) {
+      throw new HttpException('Personnel not found', HttpStatus.NOT_FOUND);
+    }
+
+    const [nssTaken, emailTaken] = await Promise.all([
+      this.prisma.user.findFirst({
+        where: {
+          deletedAt: null,
+          id: { not: userId },
+          nssNumber: { equals: nssNumber, mode: 'insensitive' },
+        },
+        select: { id: true },
+      }),
+      this.prisma.user.findFirst({
+        where: {
+          deletedAt: null,
+          id: { not: userId },
+          email: { equals: email, mode: 'insensitive' },
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (nssTaken) {
+      throw new HttpException(
+        'This NSS number is already used',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (emailTaken) {
+      throw new HttpException(
+        'This email is already used',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (prisma) => {
+      const saved = await prisma.user.update({
+        where: { id: userId },
+        data: { nssNumber, email, phoneNumber },
+        select: { id: true, name: true, nssNumber: true, email: true, phoneNumber: true },
+      });
+
+      const tokens = await prisma.onboardingToken.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (tokens.length > 1) {
+        await prisma.onboardingToken.deleteMany({
+          where: { userId, id: { not: tokens[0].id } },
+        });
+      }
+      if (tokens.length > 0) {
+        await prisma.onboardingToken.update({
+          where: { id: tokens[0].id },
+          data: { nssNumber },
+        });
+      }
+
+      await prisma.submission.updateMany({
+        where: { userId, deletedAt: null },
+        data: { nssNumber, email, phoneNumber },
+      });
+
+      const submission = await prisma.submission.findFirst({
+        where: { userId, deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+        select: { fullName: true, status: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          action: 'ONBOARDED_PERSONNEL_UPDATED',
+          userId: initiatorId,
+          submissionId: null,
+          details: `Personnel ${user.nssNumber} updated to NSS ${nssNumber}, email ${email}, mobile ${phoneNumber}`,
+        },
+      });
+
+      return {
+        id: saved.id,
+        name: saved.name || submission?.fullName || '',
+        nssNumber: saved.nssNumber,
+        email: saved.email || '',
+        phoneNumber: saved.phoneNumber || '',
+        status: submission?.status || 'AWAITING_FORM',
+      };
+    });
+
+    return updated;
+  }
+
   async deleteOnboardedUser(userId: number, initiatorId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -590,6 +708,13 @@ export class AuthService {
       throw new HttpException(
         'User not found or not onboarded',
         HttpStatus.NOT_FOUND,
+      );
+    }
+
+    if (!user.email) {
+      throw new HttpException(
+        'This personnel has no email address',
+        HttpStatus.BAD_REQUEST,
       );
     }
 

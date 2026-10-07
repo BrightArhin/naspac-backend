@@ -11,6 +11,7 @@ import {
   Param,
   Delete,
   Query,
+  Patch,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -28,6 +29,7 @@ import { TwoFactorAuthGuard } from 'src/common/guards/two-factor-auth.guard';
 import { TwoFaDto } from './dto/two-fa.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { LogoutDto } from './dto/logout.dto';
+import { UpdateOnboardedPersonnelDto } from './dto/update-onboarded-personnel.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -147,6 +149,21 @@ export class AuthController {
   async getOnboardedUsers(@Query('year') year?: string) {
     return this.authService.getOnboardedUsers(
       year ? parseInt(year) : undefined,
+    );
+  }
+
+  @Patch('onboarded/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('STAFF', 'ADMIN')
+  async updateOnboardedPersonnel(
+    @Param('id') id: string,
+    @Body() body: UpdateOnboardedPersonnelDto,
+    @Request() req,
+  ) {
+    return this.authService.updateOnboardedPersonnel(
+      parseInt(id),
+      req.user.id,
+      body,
     );
   }
 
