@@ -44,7 +44,7 @@ export function buildJobConfirmationLetterDocDefinition(params: BuildParams) {
 
   const startDate = formatServiceDate(currentYear, 10, 2);
   const endDate = formatServiceDate(nextYear, 9, 29);
-  const reportInstruction = /regional/i.test(departmentName)
+  const reportInstruction = /regional office/i.test(departmentName)
     ? 'Kindly report to the Regional Administrator, with two copies'
     : 'Kindly report to the undersigned, with two copies';
 

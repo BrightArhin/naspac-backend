@@ -20,7 +20,11 @@ async function bootstrap() {
   const port = configService.get<number>('PORT') || 3000;
   const nodeEnv = configService.get<string>('NODE_ENV') || 'development';
   const frontendUrl = configService.get<string>('FRONTEND_URL');
-  const allowedOrigins = ['https://nss.cocobod.net', frontendUrl].filter(
+  const allowedOrigins = [
+    'https://nss.cocobod.net',
+    'http://localhost:5174',
+    frontendUrl,
+  ].filter(
     (origin, index, origins): origin is string =>
       Boolean(origin) && origins.indexOf(origin) === index,
   );

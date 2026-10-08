@@ -759,6 +759,21 @@ async updateSubmissionStatus(
     HttpStatus.BAD_REQUEST,
   );
  }
+ if (dto.status === 'VALIDATED' && user.role !== 'ADMIN' && user.role !== 'SUPERADMIN') {
+  throw new HttpException('Only an admin can validate and send the appointment letter', HttpStatus.FORBIDDEN);
+ }
+ if (dto.status === 'VALIDATED' && !submission.user?.department?.name) {
+  throw new HttpException(
+    'Choose a department before validating. The appointment letter uses that department.',
+    HttpStatus.BAD_REQUEST,
+  );
+ }
+ if (dto.status === 'VALIDATED' && !submissionFlags?.verificationFormUrl) {
+  throw new HttpException(
+    'The personnel must upload a verification form before the appointment letter can be sent.',
+    HttpStatus.BAD_REQUEST,
+  );
+ }
  if (dto.status === 'VALIDATED' && submissionFlags?.verificationRejected && !submissionFlags.verificationFormUrl) {
   throw new HttpException(
     'The verification form was rejected. Wait for the personnel to upload a new PDF.',
@@ -860,6 +875,11 @@ const referenceNumber = `BOD/${yearPart}/${nssPart}`;
  jobConfirmationLetterUrl = await this.localStorageService.uploadFile(
  pdfBuffer,
  fileName,
+ );
+ await this.notificationsService.sendAppointmentLetterReadyEmail(
+  submission.email,
+  submission.fullName,
+  submission.nssNumber,
  );
  }
 

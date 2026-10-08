@@ -9,15 +9,28 @@ export class NotificationsService {
   constructor(@InjectQueue('email') private emailQueue: Queue) {}
 
   async sendOnboardingEmail(to: string, nssNumber: string, token: string) {
+    const setPasswordUrl = `${this.frontendUrl}/reset-password?nssNumber=${encodeURIComponent(nssNumber)}&token=${encodeURIComponent(token)}`;
     const enqueue = this.emailQueue.add(
       'send-email',
       {
         to,
-        subject: 'Welcome to COCOBOD!',
+        subject: 'Welcome to COCOBOD NASPAC',
         content: `
-          <h1>Welcome to COCOBOD</h1>
-          <p>Click <a href="${this.frontendUrl}/reset-password?nssNumber=${nssNumber}&token=${token}">here</a> to set your password to access your dashboard.</p>
-          <p>This link expires in 24 hours.</p>
+          <div style="font-family: Georgia, 'Times New Roman', serif; color: #2c241f; line-height: 1.6; max-width: 640px;">
+            <p style="margin: 0 0 8px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #8a6844;">Ghana Cocoa Board</p>
+            <h1 style="margin: 0 0 16px; font-size: 26px; font-weight: 600;">Welcome to COCOBOD NASPAC</h1>
+            <p>Your national service record has been opened. Set your password to continue your onboarding.</p>
+            <p style="margin: 24px 0;">
+              <a href="${setPasswordUrl}" style="display: inline-block; background: #3c2a22; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 8px;">Set your password</a>
+            </p>
+            <p>This link expires in 24 hours. Your NSS number is <strong>${nssNumber}</strong>.</p>
+            <p style="margin-top: 28px;">If you have successfully reset your password, please visit the NSS login page:<br>
+            <a href="https://nss.cocobod.net/login">https://nss.cocobod.net/login</a><br>
+            Log in using your NSS Number and the new password you created.</p>
+            <p>If you encounter any difficulties logging in, click on “Forgot Password?”, located directly below the password field on the login page. Enter your registered email address, and a new password reset link will be sent to your email.</p>
+            <p>You will be communicated with by email about the status of your application. Please also log in to your portal to check the status of your application.</p>
+            <p style="margin-top: 28px;">Best regards,<br>Human Resource, Ghana Cocoa Board</p>
+          </div>
         `,
       },
       {
@@ -153,11 +166,14 @@ export class NotificationsService {
         to,
         subject: 'Appointment Letter Endorsement Notification',
         content: `
-          <h1>Appointment Letter Endorsement Notification</h1>
-          <p>Dear ${personnelName},</p>
-          <p>Your appointment letter has been successfully endorsed.</p>
-          <p>Please check your dashboard for further details or contact the administration at hr.training@cocobod.gh or call 030 266 1877, should you have any questions.</p>
-          <p>Best regards,<br>HR Team</p>
+          <div style="font-family: Georgia, 'Times New Roman', serif; color: #2c241f; line-height: 1.6; max-width: 640px;">
+            <h1 style="font-size: 24px; font-weight: 600;">Upload your verification form</h1>
+            <p>Dear ${personnelName},</p>
+            <p>Your posting and appointment letter has been endorsed. The next step is to upload your verification form.</p>
+            <p>Log in at <a href="https://nss.cocobod.net/login">https://nss.cocobod.net/login</a> with your NSS number <strong>${nssNumber}</strong>, then open <strong>Upload Verification</strong> and submit the PDF.</p>
+            <p>If you have questions, contact hr.training@cocobod.gh or call 030 266 1877.</p>
+            <p>Best regards,<br>Human Resource, Ghana Cocoa Board</p>
+          </div>
         `,
       },
       {
@@ -196,6 +212,27 @@ export class NotificationsService {
         attempts: 3,
         backoff: 5000,
       },
+    );
+  }
+
+  async sendAppointmentLetterReadyEmail(to: string, fullName: string, nssNumber: string) {
+    await this.emailQueue.add(
+      'send-email',
+      {
+        to,
+        subject: 'Your COCOBOD appointment letter is ready',
+        content: `
+          <div style="font-family: Georgia, 'Times New Roman', serif; color: #2c241f; line-height: 1.6; max-width: 640px;">
+            <h1 style="font-size: 24px; font-weight: 600;">Your appointment letter is ready</h1>
+            <p>Dear ${fullName},</p>
+            <p>Your COCOBOD appointment letter has been issued. Log in to download it.</p>
+            <p>Visit <a href="https://nss.cocobod.net/login">https://nss.cocobod.net/login</a> and sign in with your NSS number <strong>${nssNumber}</strong>. Open <strong>Appointment Letter</strong> in the menu.</p>
+            <p>If you have questions, contact hr.training@cocobod.gh or call 030 266 1877.</p>
+            <p>Best regards,<br>Human Resource, Ghana Cocoa Board</p>
+          </div>
+        `,
+      },
+      { attempts: 3, backoff: 5000 },
     );
   }
 

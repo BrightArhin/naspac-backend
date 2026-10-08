@@ -84,7 +84,7 @@ async signDocument(
       where: { id: submissionId },
       select: { id: true, status: true, uploadRejected: true, userId: true, user: { select: { nssNumber: true, email: true, name: true } }, appointmentLetterUrl: true, postingLetterUrl: true, createdAt: true },
     });
-    if (!submission || submission.status !== 'PENDING_ENDORSEMENT') {
+    if (!submission || !['PENDING', 'PENDING_ENDORSEMENT'].includes(submission.status)) {
       throw new Error('Submission not found or not ready for endorsement');
     }
     if (submission.uploadRejected) {

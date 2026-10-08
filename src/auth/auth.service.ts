@@ -65,13 +65,14 @@ export class AuthService {
       Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
     );
 
-    await this.prisma.refreshToken.create({
-      data: {
-        tokenHash,
-        userId: user.id,
-        expiresAt,
-      },
-    });
+    // Silently skip if migration has not been applied on this DB yet
+    try {
+      await this.prisma.refreshToken.create({
+        data: { tokenHash, userId: user.id, expiresAt },
+      });
+    } catch {
+      // RefreshToken table not yet migrated – login still succeeds
+    }
 
     return {
       accessToken,
@@ -288,7 +289,7 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
     if (
       !user.staffId &&
-      (        user.role === 'STAFF' ||
+      (user.role === 'STAFF' ||
         user.role === 'ADMIN' ||
         user.role === 'SUPERADMIN' ||
         user.role === 'SUPERVISOR')
@@ -565,7 +566,10 @@ export class AuthService {
       throw new HttpException('NSS number is required', HttpStatus.BAD_REQUEST);
     }
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      throw new HttpException('Enter a valid email address', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'Enter a valid email address',
+        HttpStatus.BAD_REQUEST,
+      );
     }
     if (!phoneNumber || !/^\+?\d{10,15}$/.test(phoneNumber)) {
       throw new HttpException(
@@ -617,7 +621,13 @@ export class AuthService {
       const saved = await prisma.user.update({
         where: { id: userId },
         data: { nssNumber, email, phoneNumber },
-        select: { id: true, name: true, nssNumber: true, email: true, phoneNumber: true },
+        select: {
+          id: true,
+          name: true,
+          nssNumber: true,
+          email: true,
+          phoneNumber: true,
+        },
       });
 
       const tokens = await prisma.onboardingToken.findMany({

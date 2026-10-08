@@ -1,24 +1,29 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bull';
-import { ConfigService } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { NotificationsService } from './notifications.service';
 import { EmailProcessor } from './email.processor';
 
 @Module({
   imports: [
-    BullModule.forRoot({
-      redis: {
-        host: process.env.REDIS_HOST,
-        port: parseInt(process.env.REDIS_PORT, 10),
+    // Single Redis source: REDIS_URL takes priority, falls back to host/port
+    BullModule.forRootAsync({
+      useFactory: (configService: ConfigService) => {
+        const url = configService.get<string>('REDIS_URL');
+        if (url) {
+          return { redis: url };
+        }
+        return {
+          redis: {
+            host: configService.get<string>('REDIS_HOST') || '127.0.0.1',
+            port: configService.get<number>('REDIS_PORT') || 6379,
+          },
+        };
       },
-    }),
-    BullModule.registerQueueAsync({
-      name: 'email',
-      useFactory: async (configService: ConfigService) => ({
-        redis: configService.get<string>('REDIS_URL'),
-      }),
       inject: [ConfigService],
+      imports: [ConfigModule],
     }),
+    BullModule.registerQueue({ name: 'email' }),
   ],
   providers: [NotificationsService, EmailProcessor],
   exports: [NotificationsService],

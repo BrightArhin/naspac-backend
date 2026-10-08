@@ -31,7 +31,7 @@ export class DocumentsController {
     if (!submission) {
       throw new HttpException('Submission not found', HttpStatus.NOT_FOUND);
     }
-    if (submission.status !== 'PENDING_ENDORSEMENT') {
+    if (!['PENDING', 'PENDING_ENDORSEMENT'].includes(submission.status)) {
       throw new HttpException('Submission not ready for endorsement', HttpStatus.BAD_REQUEST);
     }
     if (submission.uploadRejected) {
