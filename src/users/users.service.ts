@@ -1592,6 +1592,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
       uploadRejectionReason: true,
       verificationRejected: true,
       verificationRejectionReason: true,
+      verificationFormUrl: true,
     },
   });
 
@@ -1630,6 +1631,7 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     uploadRejectionReason: submission && !submission.deletedAt ? submission.uploadRejectionReason : null,
     verificationRejected: submission && !submission.deletedAt ? submission.verificationRejected : false,
     verificationRejectionReason: submission && !submission.deletedAt ? submission.verificationRejectionReason : null,
+    verificationUploaded: Boolean(submission && !submission.deletedAt && submission.verificationFormUrl),
    };
   }
 

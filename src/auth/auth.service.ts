@@ -257,27 +257,19 @@ export class AuthService {
 
   async loginPersonnel(nssNumber: string, password: string) {
     const user = await this.validatePersonnel(nssNumber, password);
-    // if (!user.phoneNumber) {
-    //   throw new HttpException('Phone number not set. Please complete onboarding.', HttpStatus.BAD_REQUEST);
-    // }
-    // Personnel always require 2FA
-    await this.smsService.sendOtp(user.id);
-    const tempPayload = {
-      sub: user.id,
-      userId: user.id,
-      identifier: user.nssNumber,
+    const session = await this.createSessionTokens({
+      id: user.id,
+      nssNumber: user.nssNumber,
       role: user.role,
       name: user.name,
-      email: user.email || '',
-      phoneNumber: user.phoneNumber,
-      isTfaRequired: true,
-      isTfaEnabled: user.isTfaEnabled,
-    };
-    return {
-      tempAccessToken: this.jwtService.sign(tempPayload, { expiresIn: '5m' }),
-      message: '2FA required. OTP sent to your email.',
-      phoneNumber: user.phoneNumber,
       email: user.email,
+      phoneNumber: user.phoneNumber,
+      isTfaEnabled: false,
+    });
+    return {
+      ...session,
+      role: user.role,
+      message: 'Login successful',
     };
   }
 
