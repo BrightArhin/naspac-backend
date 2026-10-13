@@ -92,11 +92,12 @@ export class NotificationsService {
         to,
         subject: 'An Update on Your Submission',
         content: `
-          <p>Hi ${fullName},</p>
-          <p>We're writing to let you know that we couldn't accept your National Service placement at this time. Our institution has reached its capacity, and we simply don't have any more available slots.</p>
-          <p>To secure a new placement, please follow the instructions from the National Service Secretariat to go through the reposting process. We wish you the best of luck with your reposting and your service year!</p>
-          <p>If you have any questions or need further clarification, please contact our support team at hr.training@cocobod.gh or call 030 266 1877.</p>
-          <p>Best regards,<br>HR Team</p>
+          <div style="font-family: Georgia, 'Times New Roman', serif; color: #2c241f; line-height: 1.6; max-width: 640px;">
+            <p>Dear ${fullName},</p>
+            <p>We appreciate your interest in undertaking your National Service with the Ghana Cocoa Board. We are, however, unable to offer you a placement. Please contact the National Service Authority for reposting.</p>
+            <p>We wish you success in your service year.</p>
+            <p>Best regards,<br>Human Resource, Ghana Cocoa Board</p>
+          </div>
         `,
       },
       {
