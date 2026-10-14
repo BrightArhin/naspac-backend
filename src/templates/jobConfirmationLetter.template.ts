@@ -42,7 +42,7 @@ export function buildJobConfirmationLetterDocDefinition(params: BuildParams) {
     signatureBase64,
   } = params;
 
-  const startDate = formatServiceDate(currentYear, 10, 2);
+  const startDate = formatServiceDate(currentYear, 10, 9);
   const endDate = formatServiceDate(nextYear, 9, 29);
   const reportInstruction = /regional office/i.test(departmentName)
     ? 'Kindly report to the Regional Administrator, with two copies'
