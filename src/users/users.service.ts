@@ -837,9 +837,7 @@ async updateSubmissionStatus(
  }
 
  const nssNumber = submission.nssNumber?.toString() || '';
-const yearPart = nssNumber.slice(-4);
-const nssPart = nssNumber.slice(0, -4);
-const referenceNumber = `BOD/${yearPart}/${nssPart}`;
+const referenceNumber = `BOD/${currentYear}/${nssNumber}`;
 
 
  // Define PDF document using external template builder

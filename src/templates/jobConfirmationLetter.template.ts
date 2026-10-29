@@ -37,7 +37,9 @@ export function buildJobConfirmationLetterDocDefinition(params: BuildParams) {
     currentYear,
     nextYear,
     yearRange,
+    today,
     departmentName,
+    referenceNumber,
     letterheadBase64,
     signatureBase64,
   } = params;
@@ -47,6 +49,11 @@ export function buildJobConfirmationLetterDocDefinition(params: BuildParams) {
   const reportInstruction = /regional office/i.test(departmentName)
     ? 'Kindly report to the Regional Administrator, with two copies'
     : 'Kindly report to the undersigned, with two copies';
+  const letterDate = (() => {
+    const parsed = moment(today, ['DD/MM/YYYY', moment.ISO_8601], true);
+    const date = parsed.isValid() ? parsed : moment();
+    return `${ordinalDay(date.date())} ${date.format('MMMM, YYYY')}`;
+  })();
 
   return {
     background: [
@@ -59,6 +66,16 @@ export function buildJobConfirmationLetterDocDefinition(params: BuildParams) {
         : undefined,
     ].filter(Boolean),
     content: [
+      {
+        text: referenceNumber,
+        fontSize: 10,
+        absolutePosition: { x: 152, y: 183 },
+      },
+      {
+        text: letterDate,
+        fontSize: 10,
+        absolutePosition: { x: 452, y: 183 },
+      },
       { text: '', bold: true, fontSize: 14, alignment: 'center', margin: [0, 0, 0, 20] },
       { text: '', alignment: 'right', fontSize: 11, margin: [0, 0, 0, 5] },
       { text: '', alignment: 'right', fontSize: 11, margin: [0, 0, 0, 20] },
