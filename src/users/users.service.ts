@@ -785,100 +785,16 @@ async updateSubmissionStatus(
  let jobConfirmationLetterUrl = submission.jobConfirmationLetterUrl;
 
  if (dto.status === 'VALIDATED') {
- const currentYear = new Date().getFullYear();
- const yearRange = currentYear === 2025 ? '2025/2026' : `${currentYear}/${currentYear + 1}`;
- const nextYear = currentYear + 1;
- const today = moment().format('DD/MM/YYYY');
- const departmentName = submission.user.department.name;
-
-  const currentUser = await prisma.user.findUnique({
-    where: { id: userId, deletedAt: null },
-    select: { role: true, signaturePath: true },
+  const departmentName = submission.user.department.name;
+  jobConfirmationLetterUrl = await this.saveAppointmentLetterAndNotify({
+    submissionId,
+    email: submission.email,
+    fullName: submission.fullName,
+    nssNumber: submission.nssNumber,
+    phoneNumber: submission.user.phoneNumber || '',
+    departmentName,
+    divisionPostedTo: submission.divisionPostedTo,
   });
-
-  if (!currentUser) {
-    throw new HttpException(`User ${userId} not found`, HttpStatus.NOT_FOUND);
-  }
-
-  if (!['ADMIN', 'STAFF', 'SUPERADMIN'].includes(currentUser.role)) {
-    throw new HttpException(
-      `User ${userId} is not authorized to validate submissions`,
-      HttpStatus.FORBIDDEN,
-    );
-  }
-
-  const appointmentSigner = await prisma.user.findFirst({
-    where: {
-      role: 'SUPERADMIN',
-      deletedAt: null,
-      signaturePath: { not: null },
-    },
-    select: { signaturePath: true },
-  });
-  const signaturePath = appointmentSigner?.signaturePath || null;
-
-  if (!signaturePath) {
-    throw new HttpException(
-      'The superadmin must upload the appointment letter signature before a letter can be validated.',
-      HttpStatus.BAD_REQUEST,
-    );
-  }
-
-  console.log('Signature path to use:', signaturePath);
-
- let signatureBase64;
- try {
- signatureBase64 = await imageToDataUrl(signaturePath);
- } catch (error) {
- throw new HttpException(
- `Failed to load signature for user: ${error.message}`,
- HttpStatus.INTERNAL_SERVER_ERROR,
- );
- }
-
- const nssNumber = submission.nssNumber?.toString() || '';
-const referenceNumber = `BOD/${currentYear}/${nssNumber}`;
-
-
- // Define PDF document using external template builder
- const docDefinition = buildJobConfirmationLetterDocDefinition({
-   submission: submission as any,
-   currentYear,
-   nextYear,
-   yearRange,
-   today,
-   departmentName,
-   referenceNumber,
-   letterheadBase64,
-   signatureBase64,
- });
-
- // Generate PDF and upload to local storage
- const pdfDoc = (pdfMake as any).createPdf(docDefinition, null, fonts);
- const pdfBuffer: Buffer = await new Promise((resolve, reject) => {
-  try {
-    pdfDoc.getBuffer((buffer: Buffer) => {
-      if (!buffer) {
-        reject(new Error('Could not build the appointment letter'));
-        return;
-      }
-      resolve(buffer);
-    });
-  } catch (error) {
-    reject(error);
-  }
- });
-
- const fileName = `job-confirmation-letters/${submissionId}-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`;
- jobConfirmationLetterUrl = await this.localStorageService.uploadFile(
- pdfBuffer,
- fileName,
- );
- await this.notificationsService.sendAppointmentLetterReadyEmail(
-  submission.email,
-  submission.fullName,
-  submission.nssNumber,
- );
  }
 
  if (dto.status === 'REJECTED') {
@@ -1302,6 +1218,8 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
           programStudied: true,
           divisionPostedTo: true,
           status: true,
+          verificationFormUrl: true,
+          jobConfirmationLetterUrl: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -1328,6 +1246,275 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
        jobConfirmationLetterUrl: this.toAbsoluteFileUrl((s as any).jobConfirmationLetterUrl),
      })),
    }));
+  }
+
+  private async generateAppointmentLetterPdf(params: {
+    fullName: string;
+    nssNumber: string;
+    phoneNumber: string;
+    departmentName: string;
+    divisionPostedTo: string;
+  }): Promise<Buffer> {
+    const currentYear = new Date().getFullYear();
+    const yearRange =
+      currentYear === 2025 ? '2025/2026' : `${currentYear}/${currentYear + 1}`;
+    const nextYear = currentYear + 1;
+    const today = moment().format('DD/MM/YYYY');
+
+    const appointmentSigner = await this.prisma.user.findFirst({
+      where: {
+        role: 'SUPERADMIN',
+        deletedAt: null,
+        signaturePath: { not: null },
+      },
+      select: { signaturePath: true },
+    });
+    if (!appointmentSigner?.signaturePath) {
+      throw new HttpException(
+        'The superadmin must upload the appointment letter signature before a letter can be validated.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    let signatureBase64: string;
+    try {
+      signatureBase64 = await imageToDataUrl(appointmentSigner.signaturePath);
+    } catch (error) {
+      throw new HttpException(
+        `Failed to load signature for user: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+
+    const docDefinition = buildJobConfirmationLetterDocDefinition({
+      submission: {
+        fullName: params.fullName,
+        nssNumber: params.nssNumber,
+        divisionPostedTo: params.divisionPostedTo,
+        user: {
+          phoneNumber: params.phoneNumber,
+          department: { name: params.departmentName },
+        },
+      } as any,
+      currentYear,
+      nextYear,
+      yearRange,
+      today,
+      departmentName: params.departmentName,
+      referenceNumber: `BOD/${currentYear}/${params.nssNumber}`,
+      letterheadBase64,
+      signatureBase64,
+    });
+
+    const pdfDoc = (pdfMake as any).createPdf(docDefinition, null, fonts);
+    return new Promise((resolve, reject) => {
+      try {
+        pdfDoc.getBuffer((buffer: Buffer | Uint8Array) => {
+          if (!buffer) {
+            reject(new Error('Could not build the appointment letter'));
+            return;
+          }
+          resolve(Buffer.from(buffer));
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  private async saveAppointmentLetterAndNotify(params: {
+    submissionId: number;
+    email: string;
+    fullName: string;
+    nssNumber: string;
+    phoneNumber: string;
+    departmentName: string;
+    divisionPostedTo: string;
+  }) {
+    const pdfBuffer = await this.generateAppointmentLetterPdf(params);
+    const fileName = `job-confirmation-letters/${params.submissionId}-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`;
+    const letterUrl = await this.localStorageService.uploadFile(pdfBuffer, fileName);
+    await this.notificationsService.sendAppointmentLetterReadyEmail(
+      params.email,
+      params.fullName,
+      params.nssNumber,
+    );
+    return letterUrl;
+  }
+
+  async previewAppointmentLetter(
+    requesterId: number,
+    submissionId: number,
+    departmentId: number,
+  ) {
+    const requester = await this.prisma.user.findUnique({
+      where: { id: requesterId, deletedAt: null },
+      select: { role: true },
+    });
+    if (!requester || !['ADMIN', 'SUPERADMIN', 'STAFF'].includes(requester.role)) {
+      throw new HttpException(
+        'You cannot preview the appointment letter',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    const department = await this.prisma.department.findUnique({
+      where: { id: departmentId },
+      select: { id: true, name: true, deletedAt: true },
+    });
+    if (!department || department.deletedAt) {
+      throw new HttpException('Department not found or deleted', HttpStatus.NOT_FOUND);
+    }
+
+    const submission = await this.prisma.submission.findUnique({
+      where: { id: submissionId },
+      select: {
+        id: true,
+        fullName: true,
+        nssNumber: true,
+        divisionPostedTo: true,
+        deletedAt: true,
+        user: { select: { phoneNumber: true } },
+      },
+    });
+    if (!submission || submission.deletedAt) {
+      throw new HttpException('Submission not found', HttpStatus.NOT_FOUND);
+    }
+
+    const pdf = await this.generateAppointmentLetterPdf({
+      fullName: submission.fullName,
+      nssNumber: submission.nssNumber,
+      phoneNumber: submission.user?.phoneNumber || '',
+      departmentName: department.name,
+      divisionPostedTo: submission.divisionPostedTo,
+    });
+    return Buffer.from(pdf);
+  }
+
+  async sendAppointmentLetters(requesterId: number, userIds: number[]) {
+    const requester = await this.prisma.user.findUnique({
+      where: { id: requesterId, deletedAt: null },
+      select: { id: true, role: true },
+    });
+    if (!requester || !['ADMIN', 'SUPERADMIN'].includes(requester.role)) {
+      throw new HttpException(
+        'Only an admin can send appointment letters',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (!userIds?.length) {
+      throw new HttpException('Select at least one personnel', HttpStatus.BAD_REQUEST);
+    }
+
+    const now = new Date();
+    const currentYear =
+      now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1;
+
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: userIds }, role: 'PERSONNEL', deletedAt: null },
+      select: {
+        id: true,
+        name: true,
+        nssNumber: true,
+        email: true,
+        phoneNumber: true,
+        department: { select: { name: true } },
+        submissions: {
+          where: { deletedAt: null, yearOfNss: currentYear },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            email: true,
+            fullName: true,
+            nssNumber: true,
+            divisionPostedTo: true,
+            verificationFormUrl: true,
+          },
+        },
+      },
+    });
+    if (users.length !== userIds.length) {
+      throw new HttpException(
+        'One or more personnel were not found',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const sent: string[] = [];
+    const skipped: string[] = [];
+
+    for (const user of users) {
+      const submission = user.submissions[0];
+      const name = submission?.fullName || user.name || user.nssNumber;
+      if (!submission) {
+        skipped.push(`${name}: no submission`);
+        continue;
+      }
+      if (!['ENDORSED', 'VALIDATED', 'COMPLETED'].includes(submission.status)) {
+        skipped.push(`${name}: not ready for an appointment letter`);
+        continue;
+      }
+      if (!user.department?.name) {
+        skipped.push(`${name}: no department assigned`);
+        continue;
+      }
+      if (submission.status === 'ENDORSED' && !submission.verificationFormUrl) {
+        skipped.push(`${name}: verification form has not been uploaded`);
+        continue;
+      }
+
+      const letterUrl = await this.saveAppointmentLetterAndNotify({
+        submissionId: submission.id,
+        email: submission.email || user.email,
+        fullName: submission.fullName || user.name,
+        nssNumber: submission.nssNumber || user.nssNumber,
+        phoneNumber: user.phoneNumber || '',
+        departmentName: user.department.name,
+        divisionPostedTo: submission.divisionPostedTo,
+      });
+
+      await this.prisma.submission.update({
+        where: { id: submission.id },
+        data: {
+          jobConfirmationLetterUrl: letterUrl,
+          status: submission.status === 'ENDORSED' ? 'VALIDATED' : submission.status,
+          updatedAt: new Date(),
+        },
+      });
+
+      await this.prisma.auditLog.create({
+        data: {
+          submissionId: submission.id,
+          action:
+            submission.status === 'ENDORSED'
+              ? 'STATUS_CHANGED_TO_VALIDATED'
+              : 'APPOINTMENT_LETTER_RESENT',
+          userId: requesterId,
+          details: `Appointment letter sent to ${name} for ${user.department.name}`,
+          createdAt: new Date(),
+        },
+      });
+
+      sent.push(name);
+    }
+
+    if (sent.length === 0) {
+      throw new HttpException(
+        skipped[0] || 'No appointment letters were sent',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return {
+      message:
+        skipped.length > 0
+          ? `Appointment letter sent to ${sent.length} personnel. ${skipped.length} skipped.`
+          : `Appointment letter sent to ${sent.length} personnel.`,
+      sent,
+      skipped,
+    };
   }
 
  async assignPersonnelToDepartment(requesterId: number, dto: AssignPersonnelToDepartmentDto) {
@@ -2157,11 +2344,43 @@ async deleteStaff(staffId: number, requesterId: number) {
       role: 'PERSONNEL',
       deletedAt: null,
     },
-    select: { id: true, name: true, nssNumber: true },
+    select: {
+      id: true,
+      name: true,
+      nssNumber: true,
+      email: true,
+      phoneNumber: true,
+      submissions: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          email: true,
+          fullName: true,
+          nssNumber: true,
+          divisionPostedTo: true,
+        },
+      },
+    },
   });
   if (users.length !== dto.userIds.length) {
     throw new HttpException('One or more users not found or not PERSONNEL', HttpStatus.NOT_FOUND);
   }
+
+  if (dto.resendLetter && !['ADMIN', 'SUPERADMIN'].includes(requester.role)) {
+    throw new HttpException(
+      'Only an admin can resend the appointment letter',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+
+  const lettersToResend = dto.resendLetter
+    ? users.filter((user) =>
+        ['VALIDATED', 'COMPLETED'].includes(user.submissions[0]?.status),
+      )
+    : [];
 
   return this.prisma.$transaction(async (prisma) => {
     await prisma.user.updateMany({
@@ -2190,6 +2409,32 @@ async deleteStaff(staffId: number, requesterId: number) {
     });
 
     return { message: `Successfully reassigned ${users.length} personnel to department ${department.name}`, departmentId: dto.departmentId };
+    }).then(async (result) => {
+      let resentCount = 0;
+      for (const user of lettersToResend) {
+        const submission = user.submissions[0];
+        const letterUrl = await this.saveAppointmentLetterAndNotify({
+          submissionId: submission.id,
+          email: submission.email || user.email,
+          fullName: submission.fullName || user.name,
+          nssNumber: submission.nssNumber || user.nssNumber,
+          phoneNumber: user.phoneNumber || '',
+          departmentName: department.name,
+          divisionPostedTo: submission.divisionPostedTo,
+        });
+        await this.prisma.submission.update({
+          where: { id: submission.id },
+          data: { jobConfirmationLetterUrl: letterUrl, updatedAt: new Date() },
+        });
+        resentCount += 1;
+      }
+      if (resentCount > 0) {
+        return {
+          ...result,
+          message: `${result.message}. Appointment letter resent to ${resentCount} personnel.`,
+        };
+      }
+      return result;
     });
   }
 

@@ -1,6 +1,7 @@
-import { Controller, Post, Body, UseGuards, UseInterceptors, UploadedFiles, Request, Get, ParseIntPipe, Param, HttpException, HttpStatus, UploadedFile, Patch, Delete, Req, Query } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, UseInterceptors, UploadedFiles, Request, Get, ParseIntPipe, Param, HttpException, HttpStatus, UploadedFile, Patch, Delete, Req, Query, Res } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { AssignPersonnelToDepartmentDto, ChangePersonnelDepartmentDto, CreateDepartmentDto, CreateUserDto, GetPersonnelDto, UpdateDepartmentDto } from './dto/create-user.dto';
+import { AssignPersonnelToDepartmentDto, ChangePersonnelDepartmentDto, CreateDepartmentDto, CreateUserDto, GetPersonnelDto, PreviewAppointmentLetterDto, SendAppointmentLettersDto, UpdateDepartmentDto } from './dto/create-user.dto';
+import { Response } from 'express';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { JwtAuthGuard } from 'src/common/guards/auth-guard';
 import { RolesGuard } from 'src/common/guards/roles-guard';
@@ -338,6 +339,35 @@ async updateDepartment(
     @Request() req,
   ) {
     return this.usersService.changePersonnelDepartment(dto, req.user.id);
+  }
+
+  @Post('preview-appointment-letter')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'STAFF')
+  async previewAppointmentLetter(
+    @Request() req,
+    @Body() dto: PreviewAppointmentLetterDto,
+    @Res() res: Response,
+  ) {
+    const pdf = await this.usersService.previewAppointmentLetter(
+      req.user.id,
+      dto.submissionId,
+      dto.departmentId,
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="appointment-letter-preview.pdf"');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(Buffer.from(pdf));
+  }
+
+  @Post('send-appointment-letters')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  async sendAppointmentLetters(
+    @Request() req,
+    @Body() dto: SendAppointmentLettersDto,
+  ) {
+    return this.usersService.sendAppointmentLetters(req.user.id, dto.userIds);
   }
 
     @Post('upload-appointment-signature')

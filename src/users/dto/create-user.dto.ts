@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsEnum, IsOptional, IsInt, IsArray, IsNotEmpty, Min, Matches } from 'class-validator';
+import { IsString, IsEmail, IsEnum, IsOptional, IsInt, IsArray, IsNotEmpty, Min, Matches, IsBoolean } from 'class-validator';
 import { Role, SubmissionStatus } from '@prisma/client';
 
 export class CreateUserDto {
@@ -109,4 +109,25 @@ export class ChangePersonnelDepartmentDto {
   @IsInt()
   @Min(1)
   departmentId: number;
+
+  @IsOptional()
+  @IsBoolean()
+  resendLetter?: boolean;
+}
+
+export class PreviewAppointmentLetterDto {
+  @IsInt()
+  @IsNotEmpty()
+  submissionId: number;
+
+  @IsInt()
+  @IsNotEmpty()
+  departmentId: number;
+}
+
+export class SendAppointmentLettersDto {
+  @IsArray()
+  @IsInt({ each: true })
+  @IsNotEmpty()
+  userIds: number[];
 }
