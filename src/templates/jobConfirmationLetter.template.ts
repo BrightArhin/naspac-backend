@@ -69,12 +69,12 @@ export function buildJobConfirmationLetterDocDefinition(params: BuildParams) {
       {
         text: referenceNumber,
         fontSize: 10,
-        absolutePosition: { x: 152, y: 183 },
+        absolutePosition: { x: 152, y: 179 },
       },
       {
         text: letterDate,
         fontSize: 10,
-        absolutePosition: { x: 452, y: 183 },
+        absolutePosition: { x: 452, y: 179 },
       },
       { text: '', bold: true, fontSize: 14, alignment: 'center', margin: [0, 0, 0, 20] },
       { text: '', alignment: 'right', fontSize: 11, margin: [0, 0, 0, 5] },
