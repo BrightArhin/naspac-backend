@@ -1630,6 +1630,24 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
   const currentYear = year || (now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1);
   const nssNumberPattern = `%${currentYear}`;
 
+  const placementStatuses = [
+    'PENDING_ENDORSEMENT',
+    'ENDORSED',
+    'VALIDATED',
+    'COMPLETED',
+  ] as const;
+  const placementPersonnelWhere = {
+    role: 'PERSONNEL' as const,
+    deletedAt: null,
+    submissions: {
+      some: {
+        status: { in: [...placementStatuses] },
+        yearOfNss: currentYear,
+        deletedAt: null,
+      },
+    },
+  };
+
   const [
     totalPersonnel,
     totalNonPersonnel,
@@ -1639,6 +1657,8 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     auditLogCounts,
     onboardedStudentCount,
     pendingCount,
+    assignedPersonnelCount,
+    unassignedPersonnelCount,
   ] = await Promise.all([
     // 1. Total personnel (not deleted)
     this.prisma.user.count({
@@ -1730,6 +1750,22 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
         yearOfNss: currentYear,
       },
     }),
+
+    // 9. Personnel with a department on Dept. Placements
+    this.prisma.user.count({
+      where: {
+        ...placementPersonnelWhere,
+        departmentId: { not: null },
+      },
+    }),
+
+    // 10. Personnel without a department on Dept. Placements
+    this.prisma.user.count({
+      where: {
+        ...placementPersonnelWhere,
+        departmentId: null,
+      },
+    }),
   ]);
 
   const statusCounts = {
@@ -1750,6 +1786,8 @@ async uploadAppointmentSignature(userId: number, file: Express.Multer.File) {
     acceptedCount,
     onboardedStudentCount,
     pendingCount,
+    assignedPersonnelCount,
+    unassignedPersonnelCount,
    };
   }
 
